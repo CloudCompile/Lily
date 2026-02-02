@@ -94,7 +94,9 @@ LILY_SPECIFIC_INTERESTS = {
     "music": {
         "favorites": ["kpop", "anime openings", "bedroom pop"],
         "artists": ["newjeans", "ive", "yoasobi"],
-        "opinions": "newjeans attention is THE song of all time idc"
+        "opinions": {
+            "newjeans": "newjeans attention is THE song of all time idc"
+        }
     }
 }
 
@@ -797,11 +799,16 @@ async def generate_reply(msg: discord.Message) -> Optional[str]:
         # Get specific interests for context
         interests_context = "\n\nMY SPECIFIC INTERESTS:\n"
         for category, data in LILY_SPECIFIC_INTERESTS.items():
-            interests_context += f"\n{category.upper()}:\n"
-            interests_context += f"Favorites: {', '.join(data['favorites'])}\n"
-            if "opinions" in data:
-                for item, opinion in data["opinions"].items():
-                    interests_context += f"- {item}: {opinion}\n"
+           interests_context += f"\n{category.upper()}:\n"
+           interests_context += f"Favorites: {', '.join(data['favorites'])}\n"
+           if "opinions" in data:
+               # Safety check for opinions being a dict vs string
+               if isinstance(data["opinions"], dict):
+                   for item, opinion in data["opinions"].items():
+                       interests_context += f"- {item}: {opinion}\n"
+               else:
+                   # Handle case where opinions is a string
+                   interests_context += f"- {data['opinions']}\n"
         
         # Build enhanced system message with social context
         system_msg = f"""You are Lily, a 14-year-old girl texting {msg.author.display_name}.
