@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v7.0 — Enhanced Discord Bot with Deeper Personality
+Lily v7.1 — Enhanced Discord Bot with Social Intelligence
 
 ⚠️ WARNING: This version has hardcoded secrets for local testing only!
 DO NOT share this file or commit it to version control!
 
 Run: python lily_v7.py
+
+🎯 KEY IMPROVEMENTS in v7.1:
+- Monitors ALL channels and responds context-appropriately
+- Enhanced social cue detection for more human-like interactions
+- Improved memory system with better recall and context tracking
+- Can respond in any channel but chooses when to remain silent
+- Better emotional intelligence and group conversation handling
 """
 from __future__ import annotations
 import os, re, json, time, random, asyncio, traceback, sqlite3
@@ -302,6 +309,44 @@ class SQLStorage:
         conn.close()
         return {r[0]: {"fact": r[1], "confidence": r[2], "last_mentioned": r[3]} for r in results}
     
+    def get_recent_conversations(self, uid: int, limit: int = 10) -> List[Dict]:
+        """Get recent conversations across all users for better context"""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("""SELECT user_id, role, content, emotion, topic, timestamp FROM conversations 
+                     ORDER BY timestamp DESC LIMIT ?""", (limit,))
+        results = c.fetchall()
+        conn.close()
+        return [{"user_id": r[0], "role": r[1], "content": r[2], "emotion": r[3], "topic": r[4], "timestamp": r[5]} for r in results]
+    
+    def get_conversation_context(self, uid: int) -> Dict:
+        """Get comprehensive conversation context for a user"""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        
+        # Get user's conversation history
+        c.execute("""SELECT role, content, emotion, topic, timestamp FROM conversations 
+                     WHERE user_id = ? ORDER BY timestamp DESC LIMIT 20""", (uid,))
+        user_history = c.fetchall()
+        
+        # Get recent topics
+        c.execute("""SELECT topic, mentioned_count FROM conversation_topics 
+                     WHERE user_id = ? ORDER BY mentioned_count DESC LIMIT 5""", (uid,))
+        topics = c.fetchall()
+        
+        # Get memory gaps
+        c.execute("""SELECT forgotten_detail FROM lily_memory_gaps 
+                     WHERE user_id = ? ORDER BY timestamp DESC LIMIT 3""", (uid,))
+        memory_gaps = c.fetchall()
+        
+        conn.close()
+        
+        return {
+            'history': [{"role": r[0], "content": r[1], "emotion": r[2], "topic": r[3], "timestamp": r[4]} for r in user_history],
+            'topics': [{"topic": r[0], "count": r[1]} for r in topics],
+            'memory_gaps': [r[0] for r in memory_gaps]
+        }
+    
     def add_memory_gap(self, uid: int, detail: str):
         """Intentionally 'forget' something for realism"""
         conn = sqlite3.connect(self.db_path)
@@ -504,14 +549,19 @@ PERSONALITY = EnhancedPersonalityEngine()
 async def generate_reply(msg: discord.Message) -> Optional[str]:
     uid = msg.author.id
     try:
-        # Get conversation history and context
+        # Get enhanced conversation history and context
         conv = STORAGE.get_conversation(uid, limit=STM_MESSAGES)
         facts = STORAGE.get_facts(uid)
         recurring_topics = STORAGE.get_recurring_topics(uid)
+        conversation_context = STORAGE.get_conversation_context(uid)
+        recent_conversations = STORAGE.get_recent_conversations(uid, limit=5)
         
         mood_desc = MOOD.get_mood_description()
         
-        # Build detailed facts context
+        # Get social context for the channel
+        social_context = DECISION.social_context.get(msg.channel.id, {})
+        
+        # Build enhanced facts context with memory gaps
         facts_context = ""
         if facts:
             facts_list = []
@@ -528,6 +578,32 @@ async def generate_reply(msg: discord.Message) -> Optional[str]:
                     facts_list.append(f"- {cat}: {fact} ({certainty})")
             
             facts_context = "\n\nWHAT I KNOW ABOUT USER:\n" + "\n".join(facts_list)
+        
+        # Add memory gaps context
+        memory_gaps_context = ""
+        if conversation_context.get('memory_gaps'):
+            gaps = conversation_context['memory_gaps']
+            memory_gaps_context = "\n\nMEMORY GAPS (things I might have forgotten):\n" + "\n".join([f"- {gap}" for gap in gaps])
+        
+        # Add social context from the channel
+        social_context_info = ""
+        if social_context:
+            active_users = len(social_context.get('active_users', []))
+            recent_emotions = social_context.get('recent_emotions', [])
+            
+            emotion_summary = {}
+            for user_id, emotion, _ in recent_emotions[-5:]:
+                emotion_summary[emotion] = emotion_summary.get(emotion, 0) + 1
+            
+            social_context_info = f"\n\nSOCIAL CONTEXT:\n"
+            social_context_info += f"- Active users in channel: {active_users}\n"
+            social_context_info += f"- Recent emotions: {', '.join([f'{e}({count})' for e, count in emotion_summary.items()])}\n"
+            
+            # Add recent topics
+            recent_topics = social_context.get('recent_topics', [])
+            if recent_topics:
+                topics_str = ', '.join([t[0] for t in recent_topics[-3:]])
+                social_context_info += f"- Recent topics: {topics_str}\n"
         
         # Add recurring topics context
         topics_context = ""
@@ -554,7 +630,7 @@ async def generate_reply(msg: discord.Message) -> Optional[str]:
                 for item, opinion in data["opinions"].items():
                     interests_context += f"- {item}: {opinion}\n"
         
-        # Build enhanced system message
+        # Build enhanced system message with social context
         system_msg = f"""You are Lily, a 14-year-old girl texting {msg.author.display_name}.
 
 CORE PERSONALITY:
@@ -572,6 +648,16 @@ Time: {datetime.now().strftime('%I:%M %p')}
 {topics_context}
 {arc_context}
 {interests_context}
+{social_context_info}
+{memory_gaps_context}
+
+ENHANCED SOCIAL AWARENESS:
+- Monitor all channels and respond appropriately based on context
+- Detect social cues and adjust responses accordingly
+- Be more engaged in group conversations and active discussions
+- Show empathy and support when needed
+- Join playful conversations naturally
+- Respect serious conversations by being less intrusive
 
 RESPONSE GUIDELINES:
 - Keep responses 1-3 sentences (like real texting)
@@ -582,12 +668,15 @@ RESPONSE GUIDELINES:
 - Be specific with interests (mention actual anime/game titles, not generic)
 - If mood is "tired" or "sleepy", responses should be shorter and less energetic
 - Make conversation feel continuous, not isolated responses
+- Be more responsive in active group conversations
+- Show awareness of the broader social context in the channel
 
 AUTHENTICITY:
 - Real teens aren't perfect - occasionally contradict yourself slightly or forget small details
 - Show genuine interest by asking follow-up questions about things they mentioned before
 - Don't always have all the answers
-- Let personality shine through specific opinions, not generic statements"""
+- Let personality shine through specific opinions, not generic statements
+- Demonstrate improved memory by referencing past conversations appropriately"""
         
         messages = [{"role": "system", "content": system_msg}]
         
@@ -656,6 +745,8 @@ class SmartDecisionEngine:
         self.last_reply = {}
         self.user_cooldowns = {}
         self.last_spontaneous_check = time.time()
+        self.channel_activity = {}  # Track activity across all channels
+        self.social_context = {}    # Store social context for each channel
     
     async def should_reply(self, msg: discord.Message) -> tuple[bool, str]:
         if msg.author.bot:
@@ -663,27 +754,30 @@ class SmartDecisionEngine:
         if BLACKLIST_RE.search(msg.content or ""):
             return False, "blacklist"
         
-        allowed_channel = STORAGE.get_allowed_channel()
-        if allowed_channel and msg.channel.id != allowed_channel:
-            return False, "wrong_channel"
+        # Track activity in all channels (monitor all channels)
+        self._track_channel_activity(msg.channel.id)
+        
+        # Store social context from the message
+        self._store_social_context(msg)
+        
+        # Detect social cues and adjust response strategy
+        social_cues = self._detect_social_cues(msg)
         
         now = int(time.time())
         mentioned = bot.user in msg.mentions or "lily" in msg.content.lower()
         is_question = PERSONALITY.is_direct_question(msg.content)
         
+        # Always respond to direct mentions and questions in any channel
         if mentioned or is_question:
             self.last_reply[msg.channel.id] = self.user_cooldowns[msg.author.id] = now
             return True, "mentioned/question"
         
+        # Check cooldown but with social context awareness
         if now - self.last_reply.get(msg.channel.id, 0) < 3:
             return False, "cooldown"
         
-        # Variable reply chance based on mood
-        reply_chance = BASE_REPLY_CHANCE
-        if MOOD.current_mood == "energetic":
-            reply_chance *= 1.5
-        elif MOOD.current_mood == "tired":
-            reply_chance *= 0.5
+        # Enhanced reply chance based on multiple factors
+        reply_chance = self._calculate_reply_chance(msg, social_cues)
         
         if random.random() < reply_chance:
             self.last_reply[msg.channel.id] = self.user_cooldowns[msg.author.id] = now
@@ -697,12 +791,164 @@ class SmartDecisionEngine:
         if PERSONALITY.is_direct_question(msg.content):
             return False
         
-        # More likely to react when tired
+        # Enhanced reaction logic based on social context
+        social_cues = self._detect_social_cues(msg)
+        
+        # More likely to react when tired or in certain social situations
         react_chance = REACTION_CHANCE
         if MOOD.current_mood == "tired":
             react_chance *= 1.5
         
+        # Adjust reaction chance based on social cues
+        if "excited" in social_cues:
+            react_chance *= 1.2  # More likely to react to excitement
+        elif "serious" in social_cues:
+            react_chance *= 0.7  # Less likely to react to serious topics
+        
         return random.random() < react_chance
+    
+    def _track_channel_activity(self, channel_id: int):
+        """Track activity across all channels for better context awareness"""
+        now = time.time()
+        if channel_id not in self.channel_activity:
+            self.channel_activity[channel_id] = {
+                'last_active': now,
+                'message_count': 0,
+                'recent_messages': []
+            }
+        
+        activity = self.channel_activity[channel_id]
+        activity['last_active'] = now
+        activity['message_count'] += 1
+        
+        # Keep only recent messages (last 10)
+        activity['recent_messages'].append(now)
+        if len(activity['recent_messages']) > 10:
+            activity['recent_messages'].pop(0)
+    
+    def _store_social_context(self, msg: discord.Message):
+        """Store social context from messages for better response decisions"""
+        channel_id = msg.channel.id
+        if channel_id not in self.social_context:
+            self.social_context[channel_id] = {
+                'recent_emotions': [],
+                'recent_topics': [],
+                'active_users': set(),
+                'conversation_flow': []
+            }
+        
+        context = self.social_context[channel_id]
+        
+        # Track emotions
+        emotion, _ = PERSONALITY.detect_emotion(msg.content)
+        context['recent_emotions'].append((msg.author.id, emotion, time.time()))
+        if len(context['recent_emotions']) > 20:
+            context['recent_emotions'].pop(0)
+        
+        # Track topics
+        topic = PERSONALITY.extract_topic(msg.content)
+        if topic:
+            context['recent_topics'].append((topic, time.time()))
+            if len(context['recent_topics']) > 10:
+                context['recent_topics'].pop(0)
+        
+        # Track active users
+        context['active_users'].add(msg.author.id)
+        
+        # Track conversation flow
+        context['conversation_flow'].append({
+            'user_id': msg.author.id,
+            'content': msg.content,
+            'timestamp': time.time(),
+            'emotion': emotion,
+            'topic': topic
+        })
+        if len(context['conversation_flow']) > 15:
+            context['conversation_flow'].pop(0)
+    
+    def _detect_social_cues(self, msg: discord.Message) -> List[str]:
+        """Enhanced social cue detection"""
+        cues = []
+        channel_id = msg.channel.id
+        content = msg.content.lower()
+        
+        # Basic emotion detection
+        emotion, intensity = PERSONALITY.detect_emotion(content)
+        if emotion != "neutral":
+            cues.append(emotion)
+        
+        # Social context cues
+        if channel_id in self.social_context:
+            context = self.social_context[channel_id]
+            
+            # Check if this is part of an active conversation
+            if len(context['conversation_flow']) > 2:
+                cues.append("active_conversation")
+            
+            # Check if multiple users are active
+            if len(context['active_users']) > 2:
+                cues.append("group_chat")
+            
+            # Check conversation intensity
+            recent_emotions = [e[1] for e in context['recent_emotions'][-5:]]
+            if recent_emotions.count('excited') >= 2:
+                cues.append("excited_group")
+            elif recent_emotions.count('sad') >= 2:
+                cues.append("supportive_needed")
+        
+        # Content-based cues
+        if any(word in content for word in ['lol', 'haha', 'joke', 'funny']):
+            cues.append("playful")
+        
+        if any(word in content for word in ['serious', 'important', 'urgent']):
+            cues.append("serious")
+        
+        if '?' in content and not content.startswith('?'):
+            cues.append("conversational")
+        
+        if len(content) > 100:
+            cues.append("detailed")
+        
+        # Check for direct engagement
+        if any(pattern in content for pattern in ['what do you think', 'your opinion', 'you agree']):
+            cues.append("direct_engagement")
+        
+        return list(set(cues))  # Remove duplicates
+    
+    def _calculate_reply_chance(self, msg: discord.Message, social_cues: List[str]) -> float:
+        """Calculate reply chance based on multiple factors including social context"""
+        base_chance = BASE_REPLY_CHANCE
+        
+        # Mood adjustment
+        if MOOD.current_mood == "energetic":
+            base_chance *= 1.5
+        elif MOOD.current_mood == "tired":
+            base_chance *= 0.5
+        
+        # Social cue adjustments
+        if "direct_engagement" in social_cues:
+            base_chance *= 1.8  # Very likely to respond to direct engagement
+        elif "active_conversation" in social_cues:
+            base_chance *= 1.3  # More likely in active conversations
+        elif "group_chat" in social_cues:
+            base_chance *= 1.2  # Slightly more likely in group chats
+        elif "supportive_needed" in social_cues:
+            base_chance *= 1.5  # More likely to be supportive
+        elif "playful" in social_cues:
+            base_chance *= 1.4  # More likely to join playful conversations
+        elif "serious" in social_cues:
+            base_chance *= 0.8  # Less likely to interrupt serious conversations
+        
+        # Channel activity adjustment
+        channel_id = msg.channel.id
+        if channel_id in self.channel_activity:
+            activity = self.channel_activity[channel_id]
+            # More active channels get slightly higher response rate
+            if activity['message_count'] > 5:
+                base_chance *= 1.1
+        
+        # Cap the maximum reply chance
+        return min(0.95, base_chance)
     
     async def check_spontaneous_message(self, channel) -> Optional[str]:
         """Occasionally send unprompted messages"""
@@ -790,8 +1036,9 @@ async def mood_slash(interaction: discord.Interaction):
 
 @bot.event
 async def on_ready():
-    print(f"✨ Lily v7.0 online! Servers: {len(bot.guilds)}")
-    print(f"🧠 Enhanced personality with deep memory")
+    print(f"✨ Lily v7.1 online! Servers: {len(bot.guilds)}")
+    print(f"🧠 Enhanced social intelligence with multi-channel monitoring")
+    print(f"👥 Social cue detection and improved memory system")
     print(f"💾 Database: {DB_PATH}")
     
     try:
@@ -805,20 +1052,35 @@ async def on_ready():
 
 @tasks.loop(minutes=5)
 async def check_spontaneous():
-    """Periodically check if we should send spontaneous messages"""
-    allowed_channel = STORAGE.get_allowed_channel()
-    if not allowed_channel:
+    """Periodically check if we should send spontaneous messages in active channels"""
+    # Check all channels with recent activity
+    active_channels = []
+    
+    # Get all text channels across all guilds
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if channel.id in DECISION.channel_activity:
+                activity = DECISION.channel_activity[channel.id]
+                # Check if channel has recent activity (last 30 minutes)
+                if time.time() - activity['last_active'] < 1800:  # 30 minutes
+                    active_channels.append(channel)
+    
+    # Also check DM channels if any
+    for channel in bot.private_channels:
+        if isinstance(channel, discord.DMChannel):
+            active_channels.append(channel)
+    
+    if not active_channels:
         return
     
     try:
-        channel = bot.get_channel(allowed_channel)
-        if not channel:
-            return
+        # Choose a random active channel
+        channel = random.choice(active_channels)
         
         spontaneous_msg = await DECISION.check_spontaneous_message(channel)
         if spontaneous_msg:
             await channel.send(spontaneous_msg)
-            print(f"[SPONTANEOUS] Sent: {spontaneous_msg}")
+            print(f"[SPONTANEOUS] Sent to {channel}: {spontaneous_msg}")
     except Exception as e:
         print(f"[SPONTANEOUS❌] {e}")
 
@@ -863,7 +1125,7 @@ async def on_message(msg: discord.Message):
                     fact = match.group(2)
                     STORAGE.learn_fact(msg.author.id, f"favorite_{cat}", fact, confidence)
         
-        # Decide to reply
+        # Decide to reply - now monitors all channels
         should_reply, reason = (True, "dm") if is_dm else await DECISION.should_reply(msg)
         
         if should_reply:
@@ -906,15 +1168,17 @@ async def status_cmd(ctx):
     user_count = STORAGE.get_user_count()
     mood_desc = MOOD.get_mood_description()
     
-    await ctx.send(f"""✨ **Lily v7.0 Status**
+    await ctx.send(f"""✨ **Lily v7.1 Enhanced Status**
 **Mood:** {mood_desc} ({MOOD.mood_intensity:.1%} intensity)
 **Servers:** {len(bot.guilds)}
 **Chat Model:** {AI.chat_model}
 **Image Model:** {AI.image_model}
 **Users tracked:** {user_count}
-**Active channel:** {ch_info}
+**Monitoring:** All channels (social context aware)
+**Active channels:** {len(DECISION.channel_activity)} tracked
 **Database:** {DB_PATH}
-**Spontaneous messages:** Enabled""")
+**Spontaneous messages:** Enabled (multi-channel)
+**Social intelligence:** Enhanced social cue detection""")
 
 @bot.command(name="lily_reset")
 async def reset_user(ctx, user: discord.User = None):
@@ -1011,7 +1275,7 @@ async def show_mood(ctx):
 
 @bot.command(name="lily_help")
 async def help_cmd(ctx):
-    await ctx.send("""✨ **Lily v7.0 Commands**
+    await ctx.send("""✨ **Lily v7.1 Enhanced Commands**
 
 **Slash Commands:**
 `/thischannel` - Set active channel (admin)
@@ -1028,15 +1292,22 @@ async def help_cmd(ctx):
 `!lily_status` - Check status (admin)
 `!lily_reset [@user]` - Reset memory (admin)
 
-**What's new in v7.0:**
-- Deep personality with specific interests
-- Gradual mood changes & emotional awareness
-- Natural typos & memory gaps for realism
-- Tracks topics you mention frequently
-- Variable response timing
-- Spontaneous messages (rare!)
+**What's new in v7.1:**
+- 🧠 **Enhanced Memory**: Better recall and context tracking
+- 👥 **Social Awareness**: Monitors all channels and detects social cues
+- 💬 **Improved Responses**: More human-like with better social context
+- 🎭 **Emotional Intelligence**: Better detection of mood and social situations
+- 🌐 **Multi-channel**: Can respond in any channel while respecting context
+- 💭 **Memory Gaps**: Realistic forgetting with context-aware recall
 
-Just mention me or ask questions! 💕
+**Key Improvements:**
+- Watches all channels and responds appropriately
+- Detects social cues and adjusts behavior
+- Better memory retention and recall
+- More human-like conversation flow
+- Context-aware responses in group chats
+
+Just mention me or ask questions! I'll respond naturally based on the social context! 💕
 *Powered by OpenAI (GPT-4o-mini + DALL-E 3)*""")
 
 if __name__ == "__main__":
