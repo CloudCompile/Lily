@@ -67,10 +67,10 @@ log = logging.getLogger("lily")
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.presences = True      # Required for custom status (mood-reactive)
 intents.reactions = True
 intents.typing = True
 intents.dm_messages = True
-intents.message_content = True
 
 
 class LilyBot(commands.Bot):
@@ -104,12 +104,18 @@ class LilyBot(commands.Bot):
         self._last_mood_status: str = ""
 
     async def _get_prefix(self, bot, message: discord.Message) -> list[str]:
-        """Dynamic prefix based on guild settings."""
+        """Dynamic prefix based on guild settings.
+        Note: We do NOT include <@bot_id> as a prefix here because
+        on_message uses mentioned_in() to detect mentions, and
+        having the mention as a prefix causes the early-return
+        check to swallow @mention messages before they reach
+        the AI response logic.
+        """
         if not message.guild:
             return [BOT_PREFIX, ""]
         guild_id = message.guild.id
         prefix = self.db.get_guild_setting(guild_id, "prefix", BOT_PREFIX)
-        return [prefix, f"<@{bot.user.id}> ", f"<@!{bot.user.id}> "]
+        return [prefix]
 
     async def setup_hook(self):
         """Load all cogs and start background tasks."""
@@ -539,8 +545,13 @@ class LilyBot(commands.Bot):
         # Process commands first
         await self.process_commands(message)
 
-        # Don't respond to command messages
-        if message.content.startswith(tuple(await self._get_prefix(self, message))):
+        # Don't respond to command messages (only check the text prefix,
+        # NOT the mention — mentions are handled by the AI below)
+        if message.guild:
+            guild_prefix = self.db.get_guild_setting(message.guild.id, "prefix", BOT_PREFIX)
+        else:
+            guild_prefix = BOT_PREFIX
+        if message.content.startswith(guild_prefix):
             return
 
         guild_id = message.guild.id if message.guild else 0
