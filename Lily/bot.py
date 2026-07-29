@@ -79,6 +79,7 @@ class LilyBot(commands.Bot):
             command_prefix=self._get_prefix,
             intents=intents,
             application_id=None,
+            help_command=None,
         )
         # Core systems
         self.db = Database()
