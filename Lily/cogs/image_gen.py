@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.0 — Image Generation Cog
+Lily v8.5 — Image Generation Cog
 
 Commands: /image, /image_advanced, /image_edit.
+With generation quotas and smart model routing.
 """
 
 from __future__ import annotations
@@ -14,6 +15,9 @@ import io
 
 from database import Database
 from pollinations import PollinationsAPI
+from relationships import RelationshipEngine
+from quotas import QuotaSystem
+from model_router import ModelRouter
 from config import DEFAULT_IMAGE_MODEL, DEFAULT_SAFE_MODE
 
 
@@ -26,7 +30,7 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
     @app_commands.command(name="image", description="Generate an image from a prompt")
     @app_commands.describe(
         prompt="Description of the image to generate",
-        model="Image model to use (flux, zimage, gptimage, seedream5, etc.)",
+        model="Image model (flux, sana, gptimage, seedream5, etc.)",
         width="Width in pixels (default: 1024)",
         height="Height in pixels (default: 1024)",
     )
@@ -44,9 +48,23 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
         guild_id = interaction.guild_id or 0
         db: Database = self.bot.db  # type: ignore
         api: PollinationsAPI = self.bot.api  # type: ignore
+        rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
+        quotas: QuotaSystem = self.bot.quotas  # type: ignore
+
+        user_id = interaction.user.id
+        rel = rel_engine.get_relationship(guild_id, user_id)
+
+        # Check quota
+        can_gen, reason = quotas.can_generate(guild_id, user_id, "image_standard", rel.relationship_tier)
+        if not can_gen:
+            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            return
 
         use_model = model or db.get_guild_setting(guild_id, "image_model", DEFAULT_IMAGE_MODEL)
         safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
+
+        # Record action
+        rel_engine.record_action(guild_id, user_id, "used_command")
 
         try:
             image_bytes = await api.image_generate(
@@ -57,7 +75,6 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
                 safe=safe,
             )
 
-            # Send the image
             file = discord.File(io.BytesIO(image_bytes), filename="lily_image.png")
             embed = discord.Embed(
                 title="🖼️ Generated Image",
@@ -69,8 +86,16 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
 
             await interaction.followup.send(embed=embed, file=file)
 
-            # Log generation
-            db.log_generation(guild_id, interaction.user.id, "image", use_model, prompt[:50])
+            # Log and quota
+            quotas.record_generation(guild_id, user_id, "image_standard", rel.relationship_tier)
+            db.log_generation(guild_id, user_id, "image", use_model, prompt[:50])
+
+            # Save as a memory
+            db.save_memory(
+                guild_id, user_id, f"Generated image: {prompt[:100]}",
+                memory_type="episodic", emotion="creative",
+                importance=0.4, tags=["image_generation"]
+            )
 
         except Exception as e:
             await interaction.followup.send(
@@ -85,20 +110,18 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
         height="Height in pixels",
         seed="Seed for reproducible results (-1 for random)",
         quality="Image quality (low/medium/high/hd)",
-        image_url="Reference image URL for editing",
-        transparent="Generate with transparent background (gptimage only)",
+        enhance="Enhance the prompt with AI",
     )
     async def image_advanced(
         self,
         interaction: discord.Interaction,
         prompt: str,
-        model: str = "zimage",
+        model: str = "flux",
         width: int = 1024,
         height: int = 1024,
         seed: int = 0,
         quality: str = "medium",
-        image_url: str = None,
-        transparent: bool = False,
+        enhance: bool = False,
     ):
         """Generate an image with all available options."""
         await interaction.response.defer(thinking=True)
@@ -106,6 +129,19 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
         guild_id = interaction.guild_id or 0
         db: Database = self.bot.db  # type: ignore
         api: PollinationsAPI = self.bot.api  # type: ignore
+        rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
+        quotas: QuotaSystem = self.bot.quotas  # type: ignore
+
+        user_id = interaction.user.id
+        rel = rel_engine.get_relationship(guild_id, user_id)
+
+        # Check quota (pro images cost more)
+        gen_type = "image_pro" if quality in ("high", "hd") else "image_standard"
+        can_gen, reason = quotas.can_generate(guild_id, user_id, gen_type, rel.relationship_tier)
+        if not can_gen:
+            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            return
+
         safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
 
         try:
@@ -117,8 +153,7 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
                 seed=seed,
                 safe=safe,
                 quality=quality,
-                image=image_url,
-                transparent=transparent,
+                enhance=enhance,
             )
 
             file = discord.File(io.BytesIO(image_bytes), filename="lily_image.png")
@@ -131,12 +166,14 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
             details = f"Model: {model} | {width}x{height} | Seed: {seed}"
             if quality != "medium":
                 details += f" | Quality: {quality}"
-            if transparent:
-                details += " | Transparent"
+            if enhance:
+                details += " | Enhanced"
             embed.set_footer(text=details)
 
             await interaction.followup.send(embed=embed, file=file)
-            db.log_generation(guild_id, interaction.user.id, "image", model, prompt[:50])
+
+            quotas.record_generation(guild_id, user_id, gen_type, rel.relationship_tier)
+            db.log_generation(guild_id, user_id, "image", model, prompt[:50])
 
         except Exception as e:
             await interaction.followup.send(
@@ -155,7 +192,6 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
         model: str = "kontext",
     ):
         """Edit an attached image using AI."""
-        # Check for attachment
         if not interaction.message or not interaction.message.attachments:
             await interaction.response.send_message(
                 "❌ Please attach an image to edit!", ephemeral=True
@@ -167,6 +203,16 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
         guild_id = interaction.guild_id or 0
         db: Database = self.bot.db  # type: ignore
         api: PollinationsAPI = self.bot.api  # type: ignore
+        rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
+        quotas: QuotaSystem = self.bot.quotas  # type: ignore
+
+        user_id = interaction.user.id
+        rel = rel_engine.get_relationship(guild_id, user_id)
+
+        can_gen, reason = quotas.can_generate(guild_id, user_id, "image_edit", rel.relationship_tier)
+        if not can_gen:
+            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            return
 
         try:
             attachment = interaction.message.attachments[0]
@@ -179,7 +225,6 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
                 filename=attachment.filename or "image.png",
             )
 
-            # Handle response
             if "data" in result and result["data"]:
                 data = result["data"][0]
                 if "b64_json" in data:
@@ -206,7 +251,8 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
             else:
                 await interaction.followup.send("❌ No image was returned from the API.", ephemeral=True)
 
-            db.log_generation(guild_id, interaction.user.id, "image_edit", model, prompt[:50])
+            quotas.record_generation(guild_id, user_id, "image_edit", rel.relationship_tier)
+            db.log_generation(guild_id, user_id, "image_edit", model, prompt[:50])
 
         except Exception as e:
             await interaction.followup.send(

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.0 — AI Chat Cog
+Lily v8.5 — AI Chat Cog
 
-Text generation commands: /ask, /chat, /imagine, /analyze, /translate.
+Text generation commands with smart model routing, relationship awareness,
+and memory integration. She feels like a real person.
 """
 
 from __future__ import annotations
+import asyncio
+import random
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -14,27 +17,21 @@ from discord import app_commands
 from database import Database
 from pollinations import PollinationsAPI
 from personality import PersonalityEngine
+from relationships import RelationshipEngine
+from memories import MemorySystem
+from model_router import ModelRouter
+from quotas import QuotaSystem
 from config import DEFAULT_TEXT_MODEL, DEFAULT_SAFE_MODE
 
 
 class AIChatCog(commands.Cog, name="AI Chat"):
-    """AI text generation commands."""
+    """AI text generation commands — the heart of Lily."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    def _get_guild_model(self, guild_id: int) -> str:
-        """Get the text model for this guild."""
-        db: Database = self.bot.db  # type: ignore
-        return db.get_guild_setting(guild_id, "text_model", DEFAULT_TEXT_MODEL)
-
-    def _get_safe_mode(self, guild_id: int) -> str:
-        """Get the safe mode for this guild."""
-        db: Database = self.bot.db  # type: ignore
-        return db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
-
     @app_commands.command(name="ask", description="Ask Lily a question")
-    @app_commands.describe(question="Your question", model="AI model to use")
+    @app_commands.describe(question="Your question", model="AI model to use (leave empty for smart routing)")
     async def ask(
         self,
         interaction: discord.Interaction,
@@ -48,18 +45,40 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         api: PollinationsAPI = self.bot.api  # type: ignore
         personality: PersonalityEngine = self.bot.personality  # type: ignore
         db: Database = self.bot.db  # type: ignore
+        rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
+        memories: MemorySystem = self.bot.memories  # type: ignore
+        quotas: QuotaSystem = self.bot.quotas  # type: ignore
 
-        use_model = model or self._get_guild_model(guild_id)
-        safe = self._get_safe_mode(guild_id)
-
-        # Build context with conversation history
         user_id = interaction.user.id
+
+        # Get relationship
+        rel = rel_engine.get_relationship(guild_id, user_id)
+        warmth = rel.warmth
+
+        # Check quota
+        can_gen, reason = quotas.can_generate(guild_id, user_id, "text_casual", rel.relationship_tier)
+        if not can_gen:
+            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            return
+
+        # Smart model routing
+        use_model = model or await self.bot.get_model_for_task("casual_chat", guild_id)
+        safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
+
+        # Build context
         history = db.get_conversations(guild_id, user_id, limit=15)
         user_facts = db.get_facts(guild_id, user_id)
+        recent_recaps = db.get_daily_recaps(guild_id, user_id, 3)
+        memory_context = memories.get_memories_for_prompt(guild_id, user_id, question)
+        relationship_context = rel_engine.get_system_prompt_addition(guild_id, user_id)
 
         # Update mood
         mood, intensity = personality.mood.update(question)
-        system_prompt = personality.build_system_prompt(mood, personality.mood.get_energy(), user_facts)
+        system_prompt = personality.build_system_prompt(
+            mood, personality.mood.get_energy(),
+            user_facts, relationship_context, memory_context,
+            [r.get("recap_text", "") for r in recent_recaps] if recent_recaps else None,
+        )
 
         # Build messages
         messages = [{"role": "system", "content": system_prompt}]
@@ -67,23 +86,45 @@ class AIChatCog(commands.Cog, name="AI Chat"):
             messages.append({"role": msg["role"], "content": msg["content"]})
         messages.append({"role": "user", "content": question})
 
+        # Detect action for relationship
+        action = rel_engine.detect_action(question, is_command=True)
+        rel_engine.record_action(guild_id, user_id, action)
+
         try:
+            # Add a natural typing delay
+            typing_delay = personality.get_typing_delay(len(question) * 3, personality.mood.get_energy())
+            await asyncio.sleep(min(typing_delay, 3.0))
+
             response = await api.chat_completions_simple(
                 messages, model=use_model, safe=safe, max_tokens=500
             )
-            # Inject personality quirks
-            response = personality.inject_personality(response)
+            response = personality.inject_personality(response, warmth)
+
+            # Maybe add thinking prefix
+            thinking = personality.get_thinking_prefix()
+            if thinking and random.random() < 0.1:
+                response = thinking + " " + response
 
             # Save to conversation history
             db.add_conversation(guild_id, user_id, "user", question)
-            db.add_conversation(guild_id, user_id, "assistant", response)
+            db.add_conversation(guild_id, user_id, "assistant", response, mood)
 
             # Track topics
             topics = personality.extract_topics(question)
             for topic in topics:
                 db.add_topic(guild_id, user_id, topic)
 
-            # Truncate response if too long for Discord
+            # Save important memories
+            emotion = personality.detect_emotion(question)
+            if emotion in ("happy", "sad", "affection", "vulnerable", "excited"):
+                db.save_memory(guild_id, user_id, question, memory_type="auto",
+                             emotion=emotion, importance=0.7, tags=topics)
+
+            # Record generation
+            quotas.record_generation(guild_id, user_id, "text_casual", rel.relationship_tier)
+            db.log_generation(guild_id, user_id, "text", use_model, question[:50])
+
+            # Truncate response if too long
             if len(response) > 2000:
                 response = response[:1997] + "..."
 
@@ -109,34 +150,71 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         api: PollinationsAPI = self.bot.api  # type: ignore
         personality: PersonalityEngine = self.bot.personality  # type: ignore
         db: Database = self.bot.db  # type: ignore
+        rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
+        memories: MemorySystem = self.bot.memories  # type: ignore
+        quotas: QuotaSystem = self.bot.quotas  # type: ignore
 
-        use_model = model or self._get_guild_model(guild_id)
-        safe = self._get_safe_mode(guild_id)
         user_id = interaction.user.id
+        rel = rel_engine.get_relationship(guild_id, user_id)
+        warmth = rel.warmth
+
+        # Check quota
+        can_gen, reason = quotas.can_generate(guild_id, user_id, "text_casual", rel.relationship_tier)
+        if not can_gen:
+            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            return
+
+        # Route to appropriate model
+        task = "deep_conversation" if len(message) > 200 else "casual_chat"
+        use_model = model or await self.bot.get_model_for_task(task, guild_id)
+        safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
 
         # Build context
         history = db.get_conversations(guild_id, user_id, limit=15)
         user_facts = db.get_facts(guild_id, user_id)
-        mood, _ = personality.mood.update(message)
-        system_prompt = personality.build_system_prompt(mood, personality.mood.get_energy(), user_facts)
+        recent_recaps = db.get_daily_recaps(guild_id, user_id, 3)
+        memory_context = memories.get_memories_for_prompt(guild_id, user_id, message)
+        relationship_context = rel_engine.get_system_prompt_addition(guild_id, user_id)
 
-        messages = [{"role": "system", "content": system_prompt}]
+        mood, _ = personality.mood.update(message)
+        system_prompt = personality.build_system_prompt(
+            mood, personality.mood.get_energy(),
+            user_facts, relationship_context, memory_context,
+            [r.get("recap_text", "") for r in recent_recaps] if recent_recaps else None,
+        )
+
+        api_messages = [{"role": "system", "content": system_prompt}]
         for msg in history:
-            messages.append({"role": msg["role"], "content": msg["content"]})
-        messages.append({"role": "user", "content": message})
+            api_messages.append({"role": msg["role"], "content": msg["content"]})
+        api_messages.append({"role": "user", "content": message})
+
+        # Detect action
+        action = rel_engine.detect_action(message, is_command=False)
+        rel_engine.record_action(guild_id, user_id, action)
 
         try:
+            typing_delay = personality.get_typing_delay(len(message) * 3, personality.mood.get_energy())
+            await asyncio.sleep(min(typing_delay, 3.0))
+
             response = await api.chat_completions_simple(
-                messages, model=use_model, safe=safe, max_tokens=500
+                api_messages, model=use_model, safe=safe, max_tokens=500
             )
-            response = personality.inject_personality(response)
+            response = personality.inject_personality(response, warmth)
 
             db.add_conversation(guild_id, user_id, "user", message)
-            db.add_conversation(guild_id, user_id, "assistant", response)
+            db.add_conversation(guild_id, user_id, "assistant", response, mood)
 
             topics = personality.extract_topics(message)
             for topic in topics:
                 db.add_topic(guild_id, user_id, topic)
+
+            emotion = personality.detect_emotion(message)
+            if emotion in ("happy", "sad", "affection", "vulnerable", "excited"):
+                db.save_memory(guild_id, user_id, message, memory_type="auto",
+                             emotion=emotion, importance=0.7, tags=topics)
+
+            quotas.record_generation(guild_id, user_id, "text_casual", rel.relationship_tier)
+            db.log_generation(guild_id, user_id, "text", use_model, message[:50])
 
             if len(response) > 2000:
                 response = response[:1997] + "..."
@@ -152,7 +230,6 @@ class AIChatCog(commands.Cog, name="AI Chat"):
     @app_commands.describe(
         prompt="What to imagine",
         model="AI model to use",
-        system="System instructions",
         temperature="Creativity (0.0-2.0)",
     )
     async def imagine(
@@ -160,28 +237,41 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         interaction: discord.Interaction,
         prompt: str,
         model: str = None,
-        system: str = None,
         temperature: float = None,
     ):
-        """Creative text generation using the simple GET endpoint."""
+        """Creative text generation."""
         await interaction.response.defer(thinking=True)
 
         guild_id = interaction.guild_id or 0
         api: PollinationsAPI = self.bot.api  # type: ignore
-        use_model = model or self._get_guild_model(guild_id)
-        safe = self._get_safe_mode(guild_id)
+        db: Database = self.bot.db  # type: ignore
+        rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
+        quotas: QuotaSystem = self.bot.quotas  # type: ignore
+
+        user_id = interaction.user.id
+        rel = rel_engine.get_relationship(guild_id, user_id)
+
+        can_gen, reason = quotas.can_generate(guild_id, user_id, "text_standard", rel.relationship_tier)
+        if not can_gen:
+            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            return
+
+        use_model = model or await self.bot.get_model_for_task("creative_writing", guild_id)
+        safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
 
         try:
             response = await api.text_simple(
                 prompt,
                 model=use_model,
-                system=system or "You are a creative writer. Be vivid and imaginative.",
-                temperature=temperature,
+                system="You are a creative writer. Be vivid and imaginative. Write in a casual, engaging style.",
+                temperature=temperature or 0.9,
                 safe=safe,
             )
 
+            quotas.record_generation(guild_id, user_id, "text_standard", rel.relationship_tier)
+            db.log_generation(guild_id, user_id, "text", use_model, prompt[:50])
+
             if len(response) > 2000:
-                # Split into multiple messages
                 chunks = [response[i:i+2000] for i in range(0, len(response), 2000)]
                 await interaction.followup.send(chunks[0])
                 for chunk in chunks[1:]:
@@ -205,15 +295,32 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         interaction: discord.Interaction,
         image_url: str,
         question: str = "What is in this image?",
-        model: str = "openai",
+        model: str = None,
     ):
         """Analyze an image using a vision-capable model."""
         await interaction.response.defer(thinking=True)
 
+        guild_id = interaction.guild_id or 0
         api: PollinationsAPI = self.bot.api  # type: ignore
+        db: Database = self.bot.db  # type: ignore
+        rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
+        quotas: QuotaSystem = self.bot.quotas  # type: ignore
+
+        user_id = interaction.user.id
+        rel = rel_engine.get_relationship(guild_id, user_id)
+
+        can_gen, reason = quotas.can_generate(guild_id, user_id, "image_analysis", rel.relationship_tier)
+        if not can_gen:
+            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            return
+
+        use_model = model or await self.bot.get_model_for_task("image_analysis", guild_id)
 
         try:
-            response = await api.analyze_image(image_url, question, model=model)
+            response = await api.analyze_image(image_url, question, model=use_model)
+
+            quotas.record_generation(guild_id, user_id, "text_standard", rel.relationship_tier)
+            db.log_generation(guild_id, user_id, "image_analysis", use_model, question[:50])
 
             if len(response) > 2000:
                 response = response[:1997] + "..."
@@ -224,7 +331,7 @@ class AIChatCog(commands.Cog, name="AI Chat"):
                 color=discord.Color.blue(),
             )
             embed.set_thumbnail(url=image_url)
-            embed.set_footer(text=f"Model: {model}")
+            embed.set_footer(text=f"Model: {use_model}")
             await interaction.followup.send(embed=embed)
 
         except Exception as e:
@@ -250,7 +357,19 @@ class AIChatCog(commands.Cog, name="AI Chat"):
 
         guild_id = interaction.guild_id or 0
         api: PollinationsAPI = self.bot.api  # type: ignore
-        use_model = model or self._get_guild_model(guild_id)
+        db: Database = self.bot.db  # type: ignore
+        rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
+        quotas: QuotaSystem = self.bot.quotas  # type: ignore
+
+        user_id = interaction.user.id
+        rel = rel_engine.get_relationship(guild_id, user_id)
+
+        can_gen, reason = quotas.can_generate(guild_id, user_id, "translation", rel.relationship_tier)
+        if not can_gen:
+            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            return
+
+        use_model = model or await self.bot.get_model_for_task("translation", guild_id)
 
         system_prompt = f"You are a professional translator. Translate the following text to {language}. Only output the translation, nothing else."
 
@@ -263,6 +382,9 @@ class AIChatCog(commands.Cog, name="AI Chat"):
                 model=use_model,
                 max_tokens=1000,
             )
+
+            quotas.record_generation(guild_id, user_id, "translation", rel.relationship_tier)
+            db.log_generation(guild_id, user_id, "translation", use_model, text[:50])
 
             embed = discord.Embed(
                 title=f"🌐 Translation to {language}",

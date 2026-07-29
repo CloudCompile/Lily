@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.0 — Models Cog
+Lily v8.5 — Models Cog
 
-Commands: /models, /model_info, /model_status.
+Commands for browsing and managing AI models.
 """
 
 from __future__ import annotations
@@ -11,234 +11,121 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from pollinations import PollinationsAPI
 from database import Database
+from pollinations import PollinationsAPI
+from model_router import ModelRouter
+from config import ADMIN_IDS
 
 
 class ModelsCog(commands.Cog, name="Models"):
-    """Model listing and info commands."""
+    """Commands for browsing and managing AI models."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     @app_commands.command(name="models", description="List available AI models")
     @app_commands.describe(
-        category="Model category to list",
+        category="Model category: text, image, embedding",
+        tier="Cost tier: budget, standard, premium"
     )
-    @app_commands.choices(category=[
-        app_commands.Choice(name="All Models", value="all"),
-        app_commands.Choice(name="Text Models", value="text"),
-        app_commands.Choice(name="Image Models", value="image"),
-        app_commands.Choice(name="Video Models", value="video"),
-        app_commands.Choice(name="Audio Models", value="audio"),
-        app_commands.Choice(name="3D Models", value="3d"),
-        app_commands.Choice(name="Embedding Models", value="embeddings"),
-    ])
     async def models(
         self,
         interaction: discord.Interaction,
-        category: str = "all",
+        category: str = "text",
+        tier: str = None,
     ):
-        """List available AI models by category."""
-        await interaction.response.defer(thinking=True)
+        """List available models from Pollinations API."""
+        router: ModelRouter = self.bot.model_router  # type: ignore
+
+        if not router._models:
+            await interaction.response.send_message(
+                "❌ Models not loaded yet. Try again in a moment.", ephemeral=True
+            )
+            return
+
+        models = router.list_models(category=category, cost_tier=tier)
+
+        if not models:
+            await interaction.response.send_message(
+                f"No models found for category `{category}`"
+                + (f" tier `{tier}`" if tier else ""),
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title=f"📋 {category.title()} Models"
+            + (f" — {tier.title()} Tier" if tier else ""),
+            color=discord.Color.blue(),
+        )
+
+        for m in models[:20]:
+            vision = " 👁️" if m.has_vision else ""
+            reasoning = " 🧠" if m.has_reasoning else ""
+            tools = " 🔧" if m.has_tools else ""
+            cost = f"{m.completion_price:.8f}"
+            embed.add_field(
+                name=f"`{m.name}`{vision}{reasoning}{tools}",
+                value=f"{m.title} — {m.description[:50]}\nCost: {cost} pollen/token | Context: {m.context_length:,}",
+                inline=False,
+            )
+
+        if len(models) > 20:
+            embed.set_footer(text=f"Showing 20 of {len(models)} models")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="model_info", description="Get details about a specific model")
+    @app_commands.describe(model="Model name to look up")
+    async def model_info(self, interaction: discord.Interaction, model: str):
+        """Get detailed info about a specific model."""
+        router: ModelRouter = self.bot.model_router  # type: ignore
+        info = router.get_model_info(model)
+
+        if not info:
+            await interaction.response.send_message(
+                f"❌ Model `{model}` not found. Use `/models` to see available models.",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title=f"📋 {info.title}",
+            description=info.description,
+            color=discord.Color.blue(),
+        )
+        embed.add_field(name="ID", value=f"`{info.name}`", inline=True)
+        embed.add_field(name="Brand", value=info.brand, inline=True)
+        embed.add_field(name="Cost Tier", value=info.cost_tier.title(), inline=True)
+        embed.add_field(name="Prompt Cost", value=f"{info.prompt_price:.8f} pollen/token", inline=True)
+        embed.add_field(name="Completion Cost", value=f"{info.completion_price:.8f} pollen/token", inline=True)
+        embed.add_field(name="Context Length", value=f"{info.context_length:,}", inline=True)
+        embed.add_field(name="Vision", value="✅" if info.has_vision else "❌", inline=True)
+        embed.add_field(name="Reasoning", value="✅" if info.has_reasoning else "❌", inline=True)
+        embed.add_field(name="Tools", value="✅" if info.has_tools else "❌", inline=True)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="balance", description="Check API balance (admin only)")
+    async def balance(self, interaction: discord.Interaction):
+        """Check Pollinations API balance."""
+        if interaction.user.id not in ADMIN_IDS:
+            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+            return
 
         api: PollinationsAPI = self.bot.api  # type: ignore
-
         try:
-            if category == "all":
-                data = await api.list_models()
-                model_list = data if isinstance(data, list) else []
-            elif category == "text":
-                model_list = await api.list_text_models()
-            elif category == "image":
-                model_list = await api.list_image_models()
-            elif category == "video":
-                model_list = await api.list_video_models()
-            elif category == "audio":
-                model_list = await api.list_audio_models()
-            elif category == "3d":
-                model_list = await api.list_3d_models()
-            elif category == "embeddings":
-                model_list = await api.list_embedding_models()
-            else:
-                model_list = await api.list_models()
-                if isinstance(model_list, dict):
-                    model_list = model_list.get("data", [])
-
-            if not model_list:
-                await interaction.followup.send("No models found for this category.", ephemeral=True)
-                return
-
-            # Build paginated embed
+            result = await api.get_balance()
             embed = discord.Embed(
-                title=f"📋 {category.capitalize()} Models",
-                color=discord.Color.gold(),
-            )
-
-            # Show first 25 models (Discord field limit)
-            for m in model_list[:25]:
-                name = m.get("name", m.get("id", "unknown"))
-                title = m.get("title", name)
-                cat = m.get("category", "")
-                description = m.get("description", "")[:80] if m.get("description") else ""
-
-                value = f"`{name}`"
-                if cat:
-                    value += f" | {cat}"
-                if description:
-                    value += f"\n{description}"
-
-                embed.add_field(name=title[:256], value=value[:1024], inline=False)
-
-            total = len(model_list)
-            if total > 25:
-                embed.set_footer(text=f"Showing 25 of {total} models. Use /model_info for details.")
-
-            await interaction.followup.send(embed=embed)
-
-        except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to list models: {str(e)[:200]}", ephemeral=True
-            )
-
-    @app_commands.command(name="model_info", description="Get detailed info about a specific model")
-    @app_commands.describe(model="Model ID to look up")
-    async def model_info(
-        self,
-        interaction: discord.Interaction,
-        model: str,
-    ):
-        """Get detailed information about a specific model."""
-        await interaction.response.defer(thinking=True)
-
-        api: PollinationsAPI = self.bot.api  # type: ignore
-
-        try:
-            all_models = await api.list_models()
-            if isinstance(all_models, dict):
-                all_models = all_models.get("data", [])
-
-            # Find the model
-            found = None
-            for m in all_models:
-                if m.get("name") == model or m.get("id") == model:
-                    found = m
-                    break
-                # Check aliases
-                if model in m.get("aliases", []):
-                    found = m
-                    break
-
-            if not found:
-                await interaction.followup.send(
-                    f"❌ Model `{model}` not found. Use `/models` to see available models.",
-                    ephemeral=True,
-                )
-                return
-
-            embed = discord.Embed(
-                title=f"📋 {found.get('title', model)}",
-                description=found.get("description", "No description available."),
-                color=discord.Color.gold(),
-            )
-
-            embed.add_field(name="ID", value=f"`{found.get('name', model)}`", inline=True)
-            embed.add_field(name="Category", value=found.get("category", "unknown"), inline=True)
-            embed.add_field(name="Brand", value=found.get("brand", "unknown"), inline=True)
-
-            # Input/output modalities
-            input_mods = ", ".join(found.get("input_modalities", []))
-            output_mods = ", ".join(found.get("output_modalities", []))
-            if input_mods:
-                embed.add_field(name="Input", value=input_mods, inline=True)
-            if output_mods:
-                embed.add_field(name="Output", value=output_mods, inline=True)
-
-            # Capabilities
-            context = found.get("context_length")
-            if context:
-                embed.add_field(name="Context", value=f"{context:,} tokens", inline=True)
-
-            caps = []
-            if found.get("tools"):
-                caps.append("Tool Calling")
-            if found.get("reasoning"):
-                caps.append("Reasoning")
-            if caps:
-                embed.add_field(name="Capabilities", value=", ".join(caps), inline=True)
-
-            # Aliases
-            aliases = found.get("aliases", [])
-            if aliases:
-                embed.add_field(name="Aliases", value=", ".join(f"`{a}`" for a in aliases[:10]), inline=False)
-
-            # Pricing
-            pricing = found.get("pricing", {})
-            if pricing:
-                price_text = []
-                if pricing.get("promptTextTokens"):
-                    price_text.append(f"Input: {pricing['promptTextTokens']}/token")
-                if pricing.get("completionTextTokens"):
-                    price_text.append(f"Output: {pricing['completionTextTokens']}/token")
-                if price_text:
-                    embed.add_field(name="Pricing", value="\n".join(price_text), inline=False)
-
-            await interaction.followup.send(embed=embed)
-
-        except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to get model info: {str(e)[:200]}", ephemeral=True
-            )
-
-    @app_commands.command(name="model_status", description="Check model health status")
-    async def model_status(self, interaction: discord.Interaction):
-        """Check the health status of Pollinations models."""
-        await interaction.response.defer(thinking=True)
-
-        api: PollinationsAPI = self.bot.api  # type: ignore
-
-        try:
-            status = await api.model_health_status()
-
-            if not status:
-                await interaction.followup.send("No health data available.")
-                return
-
-            embed = discord.Embed(
-                title="📊 Model Health Status",
+                title="💰 API Balance",
                 color=discord.Color.green(),
             )
-
-            # Show first 20 models
-            healthy = 0
-            degraded = 0
-            for entry in status[:20]:
-                model_name = entry.get("model", "unknown")
-                success_rate = entry.get("success_rate", 0)
-                avg_latency = entry.get("avg_latency_ms", 0)
-
-                if success_rate > 0.9:
-                    status_emoji = "🟢"
-                    healthy += 1
-                elif success_rate > 0.5:
-                    status_emoji = "🟡"
-                    degraded += 1
-                else:
-                    status_emoji = "🔴"
-                    degraded += 1
-
-                embed.add_field(
-                    name=f"{status_emoji} {model_name}",
-                    value=f"Success: {success_rate:.0%} | Latency: {avg_latency:.0f}ms",
-                    inline=True,
-                )
-
-            embed.set_footer(text=f"🟢 {healthy} healthy | 🟡🔴 {degraded} issues")
-            await interaction.followup.send(embed=embed)
-
+            embed.add_field(name="Balance", value=str(result.get("balance", result.get("total", "N/A"))), inline=True)
+            embed.add_field(name="Currency", value=result.get("currency", "pollen"), inline=True)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to check model status: {str(e)[:200]}", ephemeral=True
+            await interaction.response.send_message(
+                f"❌ Failed to check balance: {str(e)[:200]}", ephemeral=True
             )
 
 
