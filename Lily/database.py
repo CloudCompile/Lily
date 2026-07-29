@@ -144,7 +144,7 @@ class Database:
 
             -- v8.5: Daily recaps (CROSS-SERVER — global by user_id)
             CREATE TABLE IF NOT EXISTS daily_recaps (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                id         INTEGER UNIQUE,
                 user_id    TEXT NOT NULL,
                 guild_id   TEXT NOT NULL DEFAULT '0',
                 recap_text TEXT NOT NULL,
