@@ -661,6 +661,17 @@ class LilyBot(commands.Bot):
             response = await self.api.chat_completions_simple(
                 api_messages, model=model, max_tokens=500
             )
+
+            # Handle empty response — retry with fallback model
+            if not response or not response.strip():
+                log.warning(f"Empty response from {model}, retrying with openai...")
+                response = await self.api.chat_completions_simple(
+                    api_messages, model="openai", max_tokens=500
+                )
+                if not response or not response.strip():
+                    await message.reply("Hmm, I'm having trouble thinking right now... try again? 💭")
+                    return
+
             response = self.personality.inject_personality(response, warmth)
 
             # Maybe add a thinking prefix
