@@ -4,6 +4,7 @@
 Lily v8.5 — Admin Cog
 
 Server administration commands for guild settings.
+v8.5: Dream journal toggle, updated defaults.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from discord.ext import commands
 from discord import app_commands
 
 from database import Database
-from config import ADMIN_IDS, PROACTIVE_DM_ENABLED, DAILY_RECAP_ENABLED
+from config import ADMIN_IDS, PROACTIVE_DM_ENABLED, DAILY_RECAP_ENABLED, DREAM_JOURNAL_ENABLED
 
 
 class AdminCog(commands.Cog, name="Admin"):
@@ -44,7 +45,7 @@ class AdminCog(commands.Cog, name="Admin"):
     @app_commands.command(name="set_model", description="Set the default model for a generation type")
     @app_commands.describe(
         model_type="Type: text or image",
-        model="Model name (e.g. openai, flux, gpt-5.4-mini)"
+        model="Model name (e.g. openai-fast, sana, flux, tomdacatto/ling-3.0-flash)"
     )
     async def set_model(
         self,
@@ -110,8 +111,8 @@ class AdminCog(commands.Cog, name="Admin"):
         embed.add_field(
             name="Models",
             value=(
-                f"Text: `{settings.get('text_model', 'openai')}`\n"
-                f"Image: `{settings.get('image_model', 'flux')}`\n"
+                f"Text: `{settings.get('text_model', 'openai-fast')}`\n"
+                f"Image: `{settings.get('image_model', 'sana')}`\n"
             ),
             inline=True,
         )
@@ -129,6 +130,7 @@ class AdminCog(commands.Cog, name="Admin"):
             value=(
                 f"Proactive DMs: {'✅' if settings.get('proactive_dm_enabled', 1) else '❌'}\n"
                 f"Daily Recaps: {'✅' if settings.get('daily_recap_enabled', 1) else '❌'}\n"
+                f"Dream Journal: {'✅' if settings.get('dream_journal_enabled', 1) else '❌'}\n"
                 f"Personality: {'✅' if settings.get('personality_enabled', 1) else '❌'}\n"
             ),
             inline=True,
@@ -171,6 +173,24 @@ class AdminCog(commands.Cog, name="Admin"):
         db.set_guild_setting(guild_id, "daily_recap_enabled", 1 if enabled else 0)
         status = "✅ enabled" if enabled else "❌ disabled"
         await interaction.response.send_message(f"Daily recaps are now {status} for this server.")
+
+    @app_commands.command(name="toggle_dreams", description="Toggle dream journal for this server")
+    @app_commands.describe(enabled="Enable or disable dream journal")
+    async def toggle_dreams(
+        self,
+        interaction: discord.Interaction,
+        enabled: bool = True,
+    ):
+        """Toggle dream journal."""
+        if not self._is_admin(interaction.user.id):
+            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+            return
+
+        guild_id = interaction.guild_id or 0
+        db: Database = self.bot.db  # type: ignore
+        db.set_guild_setting(guild_id, "dream_journal_enabled", 1 if enabled else 0)
+        status = "✅ enabled" if enabled else "❌ disabled"
+        await interaction.response.send_message(f"Dream journal is now {status} for this server.")
 
     @app_commands.command(name="reset_user", description="Reset a user's memory and relationship")
     @app_commands.describe(user="The user to reset")

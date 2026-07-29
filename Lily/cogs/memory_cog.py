@@ -4,9 +4,11 @@
 Lily v8.5 — Memory Cog
 
 Commands for viewing and managing memories with Lily.
+v8.5: Dream journal commands, cross-server memories.
 """
 
 from __future__ import annotations
+import random
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -26,7 +28,7 @@ class MemoryCog(commands.Cog, name="Memory"):
     @app_commands.command(name="memories", description="See what Lily remembers about you")
     @app_commands.describe(
         user="Check someone else's memories (admin only)",
-        memory_type="Filter by type: short_term, long_term, episodic, recap"
+        memory_type="Filter by type: short_term, long_term, episodic, recap, dream"
     )
     async def memories(
         self,
@@ -34,7 +36,7 @@ class MemoryCog(commands.Cog, name="Memory"):
         user: discord.Member = None,
         memory_type: str = None,
     ):
-        """View Lily's memories about a user."""
+        """View Lily's memories about a user (cross-server)."""
         guild_id = interaction.guild_id or 0
         db: Database = self.bot.db  # type: ignore
 
@@ -46,8 +48,8 @@ class MemoryCog(commands.Cog, name="Memory"):
             await interaction.response.send_message("❌ Only admins can view other users' memories.", ephemeral=True)
             return
 
-        # Get memories
-        memories = db.get_memories(guild_id, target.id, memory_type=memory_type, limit=10)
+        # Get memories (cross-server)
+        memories = db.get_memories(guild_id, target.id, memory_type=memory_type, limit=10, cross_server=True)
 
         if not memories:
             await interaction.response.send_message(
@@ -63,10 +65,12 @@ class MemoryCog(commands.Cog, name="Memory"):
             "episodic": "✨",
             "recap": "📖",
             "auto": "🧠",
+            "dream": "🌙",
         }
 
         embed = discord.Embed(
             title=f"🧠 Lily's Memories — {target.display_name}",
+            description="✨ Cross-server: Lily remembers you everywhere!",
             color=discord.Color.pink(),
         )
 
@@ -77,18 +81,21 @@ class MemoryCog(commands.Cog, name="Memory"):
             content = m.get("content", "")[:100]
             if len(m.get("content", "")) > 100:
                 content += "..."
+            guild_indicator = ""
+            if m.get("guild_id", "0") != str(guild_id) and m.get("guild_id", "0") != "0":
+                guild_indicator = " 🌐"
             embed.add_field(
-                name=f"{emoji} {m.get('memory_type', 'unknown').replace('_', ' ').title()} {stars}",
+                name=f"{emoji} {m.get('memory_type', 'unknown').replace('_', ' ').title()} {stars}{guild_indicator}",
                 value=content,
                 inline=False,
             )
 
-        embed.set_footer(text="Lily remembers what matters to her 💕")
+        embed.set_footer(text="Lily remembers what matters to her 💕 | Cross-server ✨")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="recaps", description="See Lily's recent diary entries about you")
     async def recaps(self, interaction: discord.Interaction):
-        """View Lily's daily recaps about you."""
+        """View Lily's daily recaps about you (cross-server)."""
         guild_id = interaction.guild_id or 0
         db: Database = self.bot.db  # type: ignore
 
@@ -103,7 +110,7 @@ class MemoryCog(commands.Cog, name="Memory"):
 
         embed = discord.Embed(
             title="📖 Lily's Diary — Recent Entries",
-            description="These are Lily's private thoughts about her conversations with you.",
+            description="These are Lily's private thoughts about her conversations with you. ✨",
             color=discord.Color.pink(),
         )
 
@@ -142,7 +149,8 @@ class MemoryCog(commands.Cog, name="Memory"):
                 guild_id, interaction.user.id,
                 f"[Lily was asked to forget: {what}]",
                 memory_type="short_term", emotion="neutral",
-                importance=0.1, tags=["forgotten"]
+                importance=0.1, tags=["forgotten"],
+                is_global=True
             )
 
         await interaction.response.send_message(response)
@@ -150,16 +158,17 @@ class MemoryCog(commands.Cog, name="Memory"):
     @app_commands.command(name="remember", description="Tell Lily to remember something important")
     @app_commands.describe(what="What you want Lily to remember")
     async def remember(self, interaction: discord.Interaction, what: str):
-        """Tell Lily to remember something important."""
+        """Tell Lily to remember something important (cross-server)."""
         guild_id = interaction.guild_id or 0
         db: Database = self.bot.db  # type: ignore
         rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
 
-        # Save it as a long-term memory
+        # Save it as a long-term memory (cross-server)
         db.save_memory(
             guild_id, interaction.user.id, what,
             memory_type="long_term", emotion="important",
-            importance=0.9, tags=["user_requested", "important"]
+            importance=0.9, tags=["user_requested", "important"],
+            is_global=True
         )
 
         # Also save as a fact
@@ -175,13 +184,68 @@ class MemoryCog(commands.Cog, name="Memory"):
             f"i'll remember that, don't worry ✨",
             f"saved!! i won't forget about that 📌",
             f"aww, i'll keep that in mind 💕",
+            f"remembered! i carry this across all servers yknow ✨",
         ]
 
         await interaction.response.send_message(random.choice(responses))
 
+    @app_commands.command(name="dream", description="Lily shares one of her dreams with you")
+    async def dream(self, interaction: discord.Interaction):
+        """Lily shares a dream from her dream journal."""
+        db: Database = self.bot.db  # type: ignore
+
+        dreams = db.get_dreams(count=5)
+        if not dreams:
+            await interaction.response.send_message(
+                "Lily hasn't had any dreams yet... she'll write some tonight! 🌙",
+                ephemeral=True,
+            )
+            return
+
+        dream = random.choice(dreams)
+        embed = discord.Embed(
+            title="🌙 Lily's Dream",
+            description=dream.get("dream_text", "")[:2000],
+            color=discord.Color.purple(),
+        )
+        mood_emoji = {
+            "dreamy": "✨", "sleepy": "😴", "cozy": "🌙",
+            "energetic": "⚡", "chill": "☕", "morning": "🌅",
+        }
+        mood = dream.get("mood", "dreamy")
+        embed.set_footer(text=f"Dream mood: {mood_emoji.get(mood, '✨')} {mood} | Dream Journal ✨")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="dream_journal", description="See Lily's dream journal")
+    async def dream_journal(self, interaction: discord.Interaction):
+        """View Lily's dream journal entries."""
+        db: Database = self.bot.db  # type: ignore
+
+        dreams = db.get_dreams(count=5)
+        if not dreams:
+            await interaction.response.send_message(
+                "Lily hasn't had any dreams yet... she'll write some tonight! 🌙",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="📖 Lily's Dream Journal",
+            description="Lily's recent dreams... ✨",
+            color=discord.Color.purple(),
+        )
+
+        for d in dreams[:5]:
+            date = d.get("created_at", "unknown")[:10]
+            mood = d.get("mood", "dreamy")
+            text = d.get("dream_text", "")[:150]
+            if len(d.get("dream_text", "")) > 150:
+                text += "..."
+            embed.add_field(name=f"🌙 {date} ({mood})", value=text, inline=False)
+
+        embed.set_footer(text="Lily dreams every night... 🌙")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(MemoryCog(bot))
-
-
-import random

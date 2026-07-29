@@ -4,7 +4,9 @@
 Lily v8.5 — Memory System
 
 Short-term, long-term, and daily recap memories.
-Lily remembers what matters, forgets what doesn't, and writes a diary every night.
+v8.5: Cross-server memories — Lily carries memories from ALL servers.
+Dream journal — she writes dreams and can share them.
+She remembers what matters, forgets what doesn't, and writes a diary every night.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from dataclasses import dataclass, field
 class Memory:
     """A single memory entry."""
     content: str
-    memory_type: str          # "short_term", "long_term", "episodic", "recap"
+    memory_type: str          # "short_term", "long_term", "episodic", "recap", "dream"
     guild_id: str = "0"
     user_id: str = "0"
     emotion: str = "neutral"  # What emotion was attached to this memory
@@ -31,6 +33,7 @@ class Memory:
     last_accessed: str = ""
     access_count: int = 0
     tags: List[str] = field(default_factory=list)
+    is_global: bool = True    # v8.5: Cross-server by default
 
     def __post_init__(self):
         now = datetime.now().isoformat()
@@ -41,14 +44,16 @@ class Memory:
 
 
 class MemorySystem:
-    """Lily's memory system. The thing that makes her feel real."""
+    """Lily's memory system. The thing that makes her feel real.
+    v8.5: Cross-server — she carries memories from ALL servers."""
 
-    # How many memories of each type to keep per user per guild
+    # How many memories of each type to keep per user
     MEMORY_LIMITS = {
         "short_term": 25,    # Recent conversation context
         "long_term": 50,     # Important facts and events
         "episodic": 30,      # Specific memorable moments
         "recap": 14,         # Daily recaps (2 weeks worth)
+        "dream": 30,         # Dream journal entries
     }
 
     # What kinds of things are worth remembering long-term
@@ -70,9 +75,11 @@ class MemorySystem:
     def __init__(self):
         self._memories: Dict[str, List[Memory]] = {}  # key -> list of memories
         self._recaps: Dict[str, List[Memory]] = {}     # key -> daily recaps
+        self._dreams: Dict[str, List[Memory]] = {}     # key -> dream journal
 
-    def _key(self, guild_id: int | str, user_id: int | str) -> str:
-        return f"{guild_id}:{user_id}"
+    def _key(self, user_id: int | str) -> str:
+        """v8.5: Key is just user_id — memories are cross-server."""
+        return f"global:{user_id}"
 
     def add_memory(
         self,
@@ -82,9 +89,10 @@ class MemorySystem:
         emotion: str = "neutral",
         importance: float = 0.5,
         tags: List[str] = None,
+        is_global: bool = True,
     ) -> Memory:
-        """Add a memory. Automatically determines the type."""
-        key = self._key(guild_id, user_id)
+        """Add a memory. Automatically determines the type. Cross-server by default."""
+        key = self._key(user_id)
 
         # Determine memory type
         memory_type = self._classify_memory(content, importance)
@@ -97,6 +105,7 @@ class MemorySystem:
             emotion=emotion,
             importance=importance,
             tags=tags or [],
+            is_global=is_global,
         )
 
         if key not in self._memories:
@@ -144,8 +153,8 @@ class MemorySystem:
     def get_relevant_memories(
         self, guild_id: int, user_id: int, context: str = "", limit: int = 10
     ) -> List[Memory]:
-        """Get memories relevant to the current context."""
-        key = self._key(guild_id, user_id)
+        """Get memories relevant to the current context. Cross-server by default."""
+        key = self._key(user_id)
         if key not in self._memories:
             return []
 
@@ -192,6 +201,8 @@ class MemorySystem:
                 score += 0.15
             elif memory.memory_type == "recap":
                 score += 0.1
+            elif memory.memory_type == "dream":
+                score += 0.05
 
             # Access count (popular memories are more relevant)
             score += min(memory.access_count * 0.02, 0.2)
@@ -213,7 +224,7 @@ class MemorySystem:
     def get_memories_for_prompt(
         self, guild_id: int, user_id: int, context: str = ""
     ) -> str:
-        """Format memories for inclusion in the system prompt."""
+        """Format memories for inclusion in the system prompt. Cross-server."""
         memories = self.get_relevant_memories(guild_id, user_id, context, limit=8)
 
         if not memories:
@@ -241,6 +252,21 @@ class MemorySystem:
             sections.append("Recent things you've talked about:")
             for m in short_term[:4]:
                 sections.append(f"  - {m.content}")
+
+        return "\n".join(sections)
+
+    def get_dreams_for_prompt(
+        self, user_id: int, count: int = 2
+    ) -> str:
+        """Format recent dreams for inclusion in the system prompt."""
+        key = self._key(user_id)
+        if key not in self._dreams or not self._dreams[key]:
+            return ""
+
+        recent = self._dreams[key][-count:]
+        sections = ["Your recent dreams:"]
+        for d in recent:
+            sections.append(f"  - {d.content[:150]}")
 
         return "\n".join(sections)
 
@@ -288,7 +314,7 @@ class MemorySystem:
         recap = "\n".join(recap_parts)
 
         # Store as a recap memory
-        key = self._key(guild_id, user_id)
+        key = self._key(user_id)
         recap_memory = Memory(
             content=recap,
             memory_type="recap",
@@ -309,17 +335,49 @@ class MemorySystem:
 
         return recap
 
+    def add_dream(self, dream_text: str, mood: str = "dreamy", user_id: int = 0) -> Memory:
+        """Add a dream journal entry."""
+        key = self._key(user_id)
+        dream = Memory(
+            content=dream_text,
+            memory_type="dream",
+            guild_id="0",
+            user_id=str(user_id),
+            emotion=mood,
+            importance=0.6,
+            tags=["dream_journal", mood],
+        )
+
+        if key not in self._dreams:
+            self._dreams[key] = []
+        self._dreams[key].append(dream)
+
+        # Keep only 30 dreams
+        if len(self._dreams[key]) > 30:
+            self._dreams[key] = self._dreams[key][-30:]
+
+        return dream
+
     def get_recent_recaps(self, guild_id: int, user_id: int, count: int = 3) -> List[str]:
         """Get recent daily recaps for context."""
-        key = self._key(guild_id, user_id)
+        key = self._key(user_id)
         if key not in self._recaps:
             return []
         return [m.content for m in self._recaps[key][-count:]]
+
+    def get_recent_dreams(self, user_id: int = 0, count: int = 3) -> List[Memory]:
+        """Get recent dream journal entries."""
+        key = self._key(user_id)
+        if key not in self._dreams:
+            return []
+        return self._dreams[key][-count:]
 
     def should_forget(self, memory: Memory) -> bool:
         """Simulate realistic forgetting. Some things slip away."""
         if memory.memory_type == "long_term" and memory.importance >= 0.8:
             return False  # Never forget important long-term memories
+        if memory.memory_type == "dream":
+            return False  # Dreams are never fully forgotten
         if memory.access_count > 5:
             return False  # Frequently accessed memories stay
 
@@ -352,6 +410,7 @@ class MemorySystem:
                 "last_accessed": m.last_accessed,
                 "access_count": m.access_count,
                 "tags": m.tags,
+                "is_global": m.is_global,
             }
             for m in memories
         ]
@@ -370,6 +429,7 @@ class MemorySystem:
                 last_accessed=d.get("last_accessed", ""),
                 access_count=d.get("access_count", 0),
                 tags=d.get("tags", []),
+                is_global=d.get("is_global", True),
             )
             for d in data
         ]

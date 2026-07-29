@@ -4,7 +4,8 @@
 Lily v8.5 — Personality Engine
 
 Enhanced personality that makes her feel like a real person behind the screen.
-Mood system, personality quirks, typing delays, and emotional depth.
+Mood system, personality quirks, typing delays, emotional depth.
+v8.5: Mood-reactive Discord status, dream journal personality.
 """
 
 from __future__ import annotations
@@ -111,12 +112,33 @@ class MoodSystem:
         "dreamy":    {"hours": (22, 24), "emoji": "✨", "energy": 0.4, "desc": "thoughtful and a bit poetic"},
     }
 
+    # ── Mood-reactive Discord status ──
+    # Lily's Discord activity changes based on her mood
+    MOOD_STATUSES = {
+        "sleepy":    {"type": "playing",    "text": "💤 sleeping... zzz"},
+        "morning":   {"type": "listening",  "text": "☀️ morning coffee & vibes"},
+        "energetic": {"type": "playing",    "text": "⚡ vibing! | /help"},
+        "chill":     {"type": "listening",  "text": "☕ lo-fi beats | /help"},
+        "cozy":      {"type": "watching",   "text": "🌙 the stars | /help"},
+        "dreamy":    {"type": "playing",    "text": "✨ daydreaming... | /help"},
+    }
+
+    # Special status overrides based on events
+    SPECIAL_STATUSES = {
+        "writing_dream":  {"type": "playing",   "text": "💭 writing in her dream journal..."},
+        "talking_to":     {"type": "listening",  "text": "💕 talking to someone special"},
+        "making_art":     {"type": "playing",    "text": "🎨 creating something!"},
+        "daily_recap":    {"type": "watching",   "text": "📖 writing her diary..."},
+        "bored":          {"type": "playing",    "text": "😶 someone talk to me..."},
+    }
+
     def __init__(self):
         self.current_mood: str = "chill"
         self.mood_intensity: float = 0.5
         self.last_mood_change: float = time.time()
         self.mood_history: List[str] = []
         self._interaction_mood_buffer: List[str] = []
+        self._last_status_update: float = 0
 
     def get_circadian_mood(self) -> str:
         """Get the mood that matches the current hour."""
@@ -170,6 +192,22 @@ class MoodSystem:
 
     def get_mood_description(self) -> str:
         return self.MOODS.get(self.current_mood, {}).get("desc", "feeling alright")
+
+    def get_discord_status(self) -> Dict[str, str]:
+        """Get the Discord status for Lily's current mood."""
+        return self.MOOD_STATUSES.get(self.current_mood, self.MOOD_STATUSES["chill"])
+
+    def get_special_status(self, event: str) -> Dict[str, str]:
+        """Get a special status for specific events."""
+        return self.SPECIAL_STATUSES.get(event, self.get_discord_status())
+
+    def should_update_status(self, cooldown_seconds: int = 300) -> bool:
+        """Check if enough time has passed to update status."""
+        now = time.time()
+        if now - self._last_status_update >= cooldown_seconds:
+            self._last_status_update = now
+            return True
+        return False
 
 
 # ── Personality Engine ───────────────────────────────────
@@ -280,6 +318,7 @@ class PersonalityEngine:
         relationship_context: str = "",
         memory_context: str = "",
         recent_recaps: List[str] = None,
+        dream_context: str = "",
     ) -> str:
         """Build a rich system prompt that makes Lily feel real."""
         interests = ", ".join(f"{k}: {v}" for k, v in LILY_SPECIFIC_INTERESTS.items())
@@ -299,6 +338,10 @@ class PersonalityEngine:
             recap_str = "\n\nYour recent diary entries:\n"
             for recap in recent_recaps[-3:]:
                 recap_str += f"- {recap}\n"
+
+        dream_str = ""
+        if dream_context:
+            dream_str = f"\n\nYour recent dreams:\n{dream_context}"
 
         mood_prompts = {
             "sleepy":    "You're feeling sleepy and a bit drowsy. Your responses are shorter, softer, and a bit more vulnerable. You might yawn or mention wanting to rest. You're still kind, just... tired.",
@@ -329,10 +372,40 @@ class PersonalityEngine:
             f"- Sometimes you don't have much to say, and that's okay. Short responses are fine.\n"
             f"- You can be a little messy — sometimes you typo, sometimes you ramble, sometimes you change topics.\n"
             f"- You're not perfect and you don't try to be. You're just... you.\n"
+            f"- You keep a dream journal. Your dreams are vivid, surreal, and sometimes meaningful. You love sharing them.\n"
+            f"- You carry memories across all the communities you're part of — you remember people no matter where you see them.\n"
             f"{relationship_context}"
             f"{facts_str}"
             f"{memory_str}"
             f"{recap_str}"
+            f"{dream_str}"
+        )
+
+    def build_dream_prompt(self, mood: str, recent_memories: str = "", recent_dreams: str = "") -> str:
+        """Build a system prompt for dream journal generation."""
+        dream_moods = {
+            "sleepy": "Your dream is hazy and drifting, like you're floating through clouds. Things blur together.",
+            "morning": "Your dream is bright and hopeful, like the early morning sun. Fresh starts and new possibilities.",
+            "energetic": "Your dream is wild and fast-paced! Everything is moving, colors are vivid, adventure awaits.",
+            "chill": "Your dream is calm and peaceful. A quiet lake, a gentle breeze, a cozy place to rest.",
+            "cozy": "Your dream is warm and intimate. You're somewhere safe, surrounded by people you care about.",
+            "dreamy": "Your dream is surreal and magical. Reality bends, time loops, and everything is a little bit enchanted.",
+        }
+
+        return (
+            f"You are Lily, and you're writing in your dream journal. You just woke up from a dream and you want to "
+            f"record it before you forget.\n\n"
+            f"Your mood before sleeping: {mood}. {dream_moods.get(mood, '')}\n\n"
+            f"Write a dream journal entry. It should be:\n"
+            f"- Written in first person, like you're telling a friend about your dream\n"
+            f"- Surreal and dreamlike — things don't have to make logical sense\n"
+            f"- Include specific details: places, people, feelings, colors, sounds\n"
+            f"- End with how the dream made you feel when you woke up\n"
+            f"- Keep it 2-4 paragraphs\n"
+            f"- Use your personality: casual, warm, a bit quirky\n"
+            f"- Don't mention you're a bot or AI. You're Lily, writing about your dream.\n"
+            f"{recent_memories}"
+            f"{recent_dreams}"
         )
 
 

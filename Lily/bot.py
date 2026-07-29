@@ -9,10 +9,12 @@ No 3D, audio, or video — just the real Lily.
 
 Features:
   - Proactive DMs (she'll start conversations with you)
-  - Affection/warmness/dislike per user per guild
-  - Memories and daily recaps (Lily's diary)
-  - Smart model routing (cheap models for casual, better for complex)
+  - Affection/warmness/dislike per user (CROSS-SERVER)
+  - Memories and daily recaps (CROSS-SERVER — she carries them everywhere)
+  - Dream journal (she writes dreams and can share them)
+  - Smart model routing (Sana Sprint for images, free models for text)
   - Generation quotas (not unlimited willy-nilly)
+  - Mood-reactive Discord status (her status changes with her mood)
   - Real person feel (typing delays, personality quirks, emotional depth)
 
 Run: python bot.py
@@ -26,6 +28,7 @@ import os
 import json
 import random
 from datetime import datetime
+from typing import Union
 
 import discord
 from discord.ext import commands, tasks
@@ -39,6 +42,8 @@ from config import (
     POLLINATIONS_KEY, POLLINATIONS_BASE_URL,
     PROACTIVE_DM_CHECK_INTERVAL, PROACTIVE_DM_ENABLED,
     DAILY_RECAP_HOUR, DAILY_RECAP_ENABLED,
+    DREAM_JOURNAL_ENABLED, DREAM_JOURNAL_HOUR, DREAM_JOURNAL_MAX_PER_DAY,
+    MOOD_STATUS_ENABLED, MOOD_STATUS_INTERVAL,
 )
 from database import Database
 from pollinations import PollinationsAPI
@@ -91,6 +96,13 @@ class LilyBot(commands.Bot):
         self._models_cache: list = []
         self._models_last_fetch: float = 0
 
+        # Dream journal tracking
+        self._dreams_today: int = 0
+        self._last_dream_date: str = ""
+
+        # Mood status tracking
+        self._last_mood_status: str = ""
+
     async def _get_prefix(self, bot, message: discord.Message) -> list[str]:
         """Dynamic prefix based on guild settings."""
         if not message.guild:
@@ -134,6 +146,8 @@ class LilyBot(commands.Bot):
         self.proactive_dm_loop.start()
         self.daily_recap_loop.start()
         self.model_refresh_loop.start()
+        self.mood_status_loop.start()
+        self.dream_journal_loop.start()
 
     async def _fetch_models(self):
         """Fetch and cache model data from Pollinations API."""
@@ -218,7 +232,7 @@ class LilyBot(commands.Bot):
 
                     try:
                         conversations = self.db.get_today_conversations(guild.id, user_id)
-                        facts = self.db.get_facts(guild.id, user_id)
+                        facts = self.db.get_facts(guild.id, user_id, cross_server=True)
                         recap = self.memories.generate_daily_recap(
                             guild.id, user_id, conversations, facts
                         )
@@ -228,7 +242,8 @@ class LilyBot(commands.Bot):
                             self.db.save_memory(
                                 guild.id, user_id, recap,
                                 memory_type="recap", emotion="reflective",
-                                importance=0.7, tags=["daily_recap"]
+                                importance=0.7, tags=["daily_recap"],
+                                is_global=True
                             )
                             log.info(f"Generated daily recap for user {user_id} in guild {guild.id}")
                     except Exception as e:
@@ -242,6 +257,166 @@ class LilyBot(commands.Bot):
         """Refresh model data periodically."""
         await self._fetch_models()
 
+    @tasks.loop(seconds=MOOD_STATUS_INTERVAL)
+    async def mood_status_loop(self):
+        """Update Lily's Discord status based on her mood. Mood-reactive status."""
+        if not MOOD_STATUS_ENABLED:
+            return
+
+        try:
+            # Update mood
+            mood, intensity = self.personality.mood.update()
+
+            # Get the status for this mood
+            status_config = self.personality.mood.get_discord_status()
+            status_text = status_config.get("text", "✨ daydreaming... | /help")
+            status_type = status_config.get("type", "playing")
+
+            # Don't update if it hasn't changed
+            if status_text == self._last_mood_status:
+                return
+
+            # Map status type to Discord activity type
+            type_map = {
+                "playing": discord.ActivityType.playing,
+                "listening": discord.ActivityType.listening,
+                "watching": discord.ActivityType.watching,
+                "streaming": discord.ActivityType.streaming,
+            }
+            activity_type = type_map.get(status_type, discord.ActivityType.playing)
+
+            await self.change_presence(
+                activity=discord.Activity(
+                    type=activity_type,
+                    name=status_text,
+                )
+            )
+            self._last_mood_status = status_text
+            log.debug(f"Updated mood status: {mood} → {status_text}")
+
+        except Exception as e:
+            log.error(f"Mood status loop error: {e}")
+
+    @tasks.loop(minutes=60)
+    async def dream_journal_loop(self):
+        """Generate dream journal entries when Lily is in a dreamy/sleepy mood."""
+        if not DREAM_JOURNAL_ENABLED:
+            return
+
+        now = datetime.now()
+
+        # Only generate dreams at night (between 1 AM and 5 AM)
+        if not (1 <= now.hour <= 5):
+            return
+
+        # Reset dream count if it's a new day
+        today = now.strftime("%Y-%m-%d")
+        if today != self._last_dream_date:
+            self._dreams_today = 0
+            self._last_dream_date = today
+
+        # Don't generate too many dreams per day
+        if self._dreams_today >= DREAM_JOURNAL_MAX_PER_DAY:
+            return
+
+        # Only dream if she's in a dreamy or sleepy mood
+        mood, _ = self.personality.mood.update()
+        if mood not in ("dreamy", "sleepy", "cozy"):
+            return
+
+        # 30% chance per check cycle
+        if random.random() > 0.3:
+            return
+
+        try:
+            await self._generate_dream()
+        except Exception as e:
+            log.error(f"Dream journal error: {e}")
+
+    async def _generate_dream(self):
+        """Generate a dream journal entry."""
+        mood, _ = self.personality.mood.update()
+
+        # Get recent memories for dream inspiration
+        recent_memories = self.db.get_memories(0, 0, memory_type="long_term", limit=3, cross_server=True)
+        recent_dreams = self.db.get_dreams(count=2)
+
+        # Build inspiration from recent memories
+        inspiration = ""
+        if recent_memories:
+            inspiration = "Recent things on your mind:\n"
+            for m in recent_memories[:3]:
+                inspiration += f"  - {m.get('content', '')[:80]}\n"
+
+        dream_memories = ""
+        if recent_dreams:
+            dream_memories = "Your recent dreams:\n"
+            for d in recent_dreams[:2]:
+                dream_memories += f"  - {d.get('dream_text', '')[:80]}\n"
+
+        # Build dream prompt
+        dream_prompt = self.personality.build_dream_prompt(
+            mood, inspiration, dream_memories
+        )
+
+        # Use a cheap model for dream generation
+        model = await self.get_model_for_task("dream_journal")
+
+        try:
+            # Set special status while dreaming
+            if MOOD_STATUS_ENABLED:
+                dream_status = self.personality.mood.get_special_status("writing_dream")
+                type_map = {
+                    "playing": discord.ActivityType.playing,
+                    "listening": discord.ActivityType.listening,
+                    "watching": discord.ActivityType.watching,
+                }
+                activity_type = type_map.get(dream_status.get("type", "playing"), discord.ActivityType.playing)
+                await self.change_presence(
+                    activity=discord.Activity(
+                        type=activity_type,
+                        name=dream_status.get("text", "💭 writing in her dream journal..."),
+                    )
+                )
+
+            dream_text = await self.api.chat_completions_simple(
+                [{"role": "system", "content": dream_prompt},
+                 {"role": "user", "content": "Write your dream journal entry for tonight."}],
+                model=model,
+                max_tokens=400,
+                temperature=0.9,
+            )
+
+            # Save the dream
+            self.db.save_dream(
+                dream_text=dream_text,
+                mood=mood,
+                inspiration=inspiration[:200],
+            )
+            self.memories.add_dream(dream_text, mood)
+
+            self._dreams_today += 1
+            log.info(f"Lily wrote a dream journal entry (mood: {mood})")
+
+            # Restore mood status
+            if MOOD_STATUS_ENABLED:
+                status_config = self.personality.mood.get_discord_status()
+                type_map = {
+                    "playing": discord.ActivityType.playing,
+                    "listening": discord.ActivityType.listening,
+                    "watching": discord.ActivityType.watching,
+                }
+                activity_type = type_map.get(status_config.get("type", "playing"), discord.ActivityType.playing)
+                await self.change_presence(
+                    activity=discord.Activity(
+                        type=activity_type,
+                        name=status_config.get("text", "✨ daydreaming... | /help"),
+                    )
+                )
+
+        except Exception as e:
+            log.error(f"Failed to generate dream: {e}")
+
     async def _send_proactive_dm(self, guild: discord.Guild, member: discord.Member, reason: str):
         """Send a proactive DM to a user."""
         try:
@@ -252,17 +427,19 @@ class LilyBot(commands.Bot):
             # Build the DM message
             model = await self.get_model_for_task("proactive_dm", guild.id)
 
-            # Build context
-            user_facts = self.db.get_facts(guild.id, member.id)
+            # Build context — cross-server memories
+            user_facts = self.db.get_facts(guild.id, member.id, cross_server=True)
             recent_recaps = self.db.get_daily_recaps(guild.id, member.id, 3)
             memory_context = self.memories.get_memories_for_prompt(guild.id, member.id)
             relationship_context = self.relationships.get_system_prompt_addition(guild.id, member.id)
+            dream_context = self.memories.get_dreams_for_prompt(member.id)
 
             mood, _ = self.personality.mood.update()
             system_prompt = self.personality.build_system_prompt(
                 mood, self.personality.mood.get_energy(),
                 user_facts, relationship_context, memory_context,
                 [r.get("recap_text", "") for r in recent_recaps] if recent_recaps else None,
+                dream_context,
             )
 
             # Generate the DM based on reason
@@ -277,6 +454,7 @@ class LilyBot(commands.Bot):
                 "felt_like_saying_hi": "You just felt like saying hi. No big reason. Keep it short.",
                 "follow_up_topic": "You were thinking about something you talked about before. Follow up on it casually.",
                 "haven_talked_in_a_while": "It's been a while since you talked. You wanted to check in. Be warm but not overwhelming.",
+                "had_a_dream": "You had a dream about this person or something reminded you of a dream. Share it briefly.",
             }
 
             dm_prompt = reason_prompts.get(reason, "You wanted to say hi to this person. Keep it casual and natural.")
@@ -315,6 +493,8 @@ class LilyBot(commands.Bot):
     @proactive_dm_loop.before_loop
     @daily_recap_loop.before_loop
     @model_refresh_loop.before_loop
+    @mood_status_loop.before_loop
+    @dream_journal_loop.before_loop
     async def before_loops(self):
         """Wait until the bot is ready before starting loops."""
         await self.wait_until_ready()
@@ -328,16 +508,27 @@ class LilyBot(commands.Bot):
         log.info(f"   API Key: {'configured' if POLLINATIONS_KEY else 'not set (free tier only)'}")
         log.info(f"   Proactive DMs: {'enabled' if PROACTIVE_DM_ENABLED else 'disabled'}")
         log.info(f"   Daily Recaps: {'enabled' if DAILY_RECAP_ENABLED else 'disabled'}")
-        log.info(f"   Smart Model Routing: active")
+        log.info(f"   Dream Journal: {'enabled' if DREAM_JOURNAL_ENABLED else 'disabled'}")
+        log.info(f"   Mood Status: {'enabled' if MOOD_STATUS_ENABLED else 'disabled'}")
+        log.info(f"   Smart Model Routing: active (Sana Sprint / openai-fast)")
+        log.info(f"   Cross-Server Memories: enabled")
         log.info(f"{'='*50}")
 
-        # Set presence
-        await self.change_presence(
-            activity=discord.Activity(
-                type=discord.ActivityType.listening,
-                name="to you 💕 | /help",
+        # Set initial mood-reactive status
+        if MOOD_STATUS_ENABLED:
+            status_config = self.personality.mood.get_discord_status()
+            type_map = {
+                "playing": discord.ActivityType.playing,
+                "listening": discord.ActivityType.listening,
+                "watching": discord.ActivityType.watching,
+            }
+            activity_type = type_map.get(status_config.get("type", "playing"), discord.ActivityType.playing)
+            await self.change_presence(
+                activity=discord.Activity(
+                    type=activity_type,
+                    name=status_config.get("text", "✨ daydreaming... | /help"),
+                )
             )
-        )
 
     async def on_message(self, message: discord.Message):
         """Handle all messages — the heart of Lily's personality."""
@@ -377,7 +568,7 @@ class LilyBot(commands.Bot):
         for topic in topics:
             self.db.add_topic(guild_id, user_id, topic)
 
-        # Save as memory if it's important
+        # Save as memory if it's important (CROSS-SERVER)
         importance = 0.5
         if emotion in ("happy", "sad", "affection", "vulnerable", "excited"):
             importance = 0.7
@@ -387,7 +578,8 @@ class LilyBot(commands.Bot):
             self.db.save_memory(
                 guild_id, user_id, message.content,
                 memory_type="auto", emotion=emotion,
-                importance=importance, tags=topics
+                importance=importance, tags=topics,
+                is_global=True
             )
 
         # Decide whether to respond
@@ -420,18 +612,20 @@ class LilyBot(commands.Bot):
                 task = "deep_conversation"
             model = await self.get_model_for_task(task, guild_id)
 
-            # Build context
+            # Build context — cross-server memories
             history = self.db.get_conversations(guild_id, user_id, limit=15)
-            user_facts = self.db.get_facts(guild_id, user_id)
+            user_facts = self.db.get_facts(guild_id, user_id, cross_server=True)
             recent_recaps = self.db.get_daily_recaps(guild_id, user_id, 3)
             memory_context = self.memories.get_memories_for_prompt(guild_id, user_id, message.content)
             relationship_context = self.relationships.get_system_prompt_addition(guild_id, user_id)
+            dream_context = self.memories.get_dreams_for_prompt(user_id)
 
             mood, _ = self.personality.mood.update(message.content)
             system_prompt = self.personality.build_system_prompt(
                 mood, self.personality.mood.get_energy(),
                 user_facts, relationship_context, memory_context,
                 [r.get("recap_text", "") for r in recent_recaps] if recent_recaps else None,
+                dream_context,
             )
 
             # Build messages
@@ -488,6 +682,8 @@ class LilyBot(commands.Bot):
         self.proactive_dm_loop.cancel()
         self.daily_recap_loop.cancel()
         self.model_refresh_loop.cancel()
+        self.mood_status_loop.cancel()
+        self.dream_journal_loop.cancel()
         await self.api.close()
         await super().close()
 
@@ -502,7 +698,7 @@ async def prefix_help(ctx):
     """Show help via prefix command."""
     embed = discord.Embed(
         title="🌸 Lily v8.5 — Help",
-        description="Lily is a multi-server AI bot who actually feels real. She remembers you, has feelings, and will reach out to you.",
+        description="Lily is a multi-server AI bot who actually feels real. She remembers you across ALL servers, has feelings, writes dreams, and will reach out to you.",
         color=discord.Color.pink(),
     )
     embed.add_field(
@@ -515,6 +711,8 @@ async def prefix_help(ctx):
             f"`{ctx.prefix}topics [@user]` — See topics\n"
             f"`{ctx.prefix}relationship [@user]` — See relationship\n"
             f"`{ctx.prefix}memories [@user]` — See memories\n"
+            f"`{ctx.prefix}dream` — Lily shares a dream\n"
+            f"`{ctx.prefix}dreams` — See dream journal\n"
             f"`{ctx.prefix}quota` — Check your generation quota\n"
             f"`{ctx.prefix}reset [@user]` — Reset memory (admin)\n"
             f"`{ctx.prefix}channel <#channel>` — Set channel (admin)\n"
@@ -522,7 +720,7 @@ async def prefix_help(ctx):
         ),
         inline=False,
     )
-    embed.set_footer(text="Lily v8.5 — She lives 💕")
+    embed.set_footer(text="Lily v8.5 — She lives 💕 | Cross-server memories ✨")
     await ctx.send(embed=embed)
 
 
@@ -535,12 +733,12 @@ async def prefix_image(ctx, *, prompt: str):
             db = bot.db
             api = bot.api
 
-            model = db.get_guild_setting(guild_id, "image_model", "flux")
+            model = db.get_guild_setting(guild_id, "image_model", "sana")
             safe = db.get_guild_setting(guild_id, "safe_mode", "privacy,secrets")
 
             # Check quota
             rel = bot.relationships.get_relationship(guild_id, ctx.author.id)
-            can_gen, reason = bot.quotas.can_generate(guild_id, ctx.author.id, "image_standard", rel.relationship_tier)
+            can_gen, reason = bot.quotas.can_generate(guild_id, ctx.author.id, "image_quick", rel.relationship_tier)
             if not can_gen:
                 await ctx.send(f"❌ {reason}")
                 return
@@ -558,8 +756,10 @@ async def prefix_image(ctx, *, prompt: str):
             embed.set_footer(text=f"Model: {model}")
             await ctx.send(embed=embed, file=file)
 
-            bot.quotas.record_generation(guild_id, ctx.author.id, "image_standard", rel.relationship_tier)
-            db.log_generation(guild_id, ctx.author.id, "image", model, prompt[:50])
+            # Calculate actual cost
+            cost = bot.model_router.estimate_image_cost(model)
+            bot.quotas.record_generation(guild_id, ctx.author.id, "image_quick", rel.relationship_tier, actual_cost=cost)
+            db.log_generation(guild_id, ctx.author.id, "image", model, prompt[:50], cost_pollen=cost)
 
         except Exception as e:
             await ctx.send(f"❌ Failed to generate image: {str(e)[:200]}")
@@ -596,6 +796,9 @@ async def prefix_status(ctx):
     embed.add_field(name="API", value="Pollinations", inline=True)
     embed.add_field(name="API Key", value="✅" if POLLINATIONS_KEY else "❌ (free tier)", inline=True)
     embed.add_field(name="Proactive DMs", value="✅" if PROACTIVE_DM_ENABLED else "❌", inline=True)
+    embed.add_field(name="Dream Journal", value="✅" if DREAM_JOURNAL_ENABLED else "❌", inline=True)
+    embed.add_field(name="Mood Status", value="✅" if MOOD_STATUS_ENABLED else "❌", inline=True)
+    embed.add_field(name="Cross-Server Mem", value="✅", inline=True)
 
     await ctx.send(embed=embed)
 
@@ -621,6 +824,7 @@ async def prefix_relationship(ctx, user: discord.Member = None):
     if rel.first_met:
         embed.add_field(name="First Met", value=rel.first_met[:10], inline=True)
 
+    embed.set_footer(text="Cross-server: Lily remembers you everywhere! ✨")
     await ctx.send(embed=embed)
 
 
@@ -635,11 +839,11 @@ async def prefix_quota(ctx):
         title="🌸 Your Generation Quota",
         color=discord.Color.pink(),
     )
-    embed.add_field(name="Pollen", value=f"{status['pollen_used']}/{status['pollen_budget']} used", inline=True)
+    embed.add_field(name="Pollen", value=f"{status['pollen_used']:.4f}/{status['pollen_budget']} used", inline=True)
     embed.add_field(name="Text Gens", value=f"{status['text_gens']}/{status['text_limit']}", inline=True)
     embed.add_field(name="Image Gens", value=f"{status['image_gens']}/{status['image_limit']}", inline=True)
     embed.add_field(name="Tier", value=status['tier'].replace("_", " ").title(), inline=True)
-    embed.set_footer(text="Higher relationship tiers get more pollen! 💕")
+    embed.set_footer(text="Sana Sprint = 0.0001 pollen/image! 💕")
 
     await ctx.send(embed=embed)
 
@@ -666,14 +870,14 @@ async def prefix_facts(ctx, user: discord.Member = None):
     guild_id = ctx.guild.id if ctx.guild else 0
     target = user or ctx.author
 
-    user_facts = bot.db.get_facts(guild_id, target.id)
+    user_facts = bot.db.get_facts(guild_id, target.id, cross_server=True)
 
     if user_facts:
         facts_text = "\n".join(
             f"**{f.get('category', 'general')}**: {f.get('fact', '')}"
             for f in user_facts[:10]
         )
-        await ctx.send(f"📝 Facts about {target.display_name}:\n{facts_text}")
+        await ctx.send(f"📝 Facts about {target.display_name} (cross-server):\n{facts_text}")
     else:
         await ctx.send(f"Lily doesn't know anything about {target.display_name} yet.")
 
@@ -702,16 +906,59 @@ async def prefix_memories(ctx, user: discord.Member = None):
     guild_id = ctx.guild.id if ctx.guild else 0
     target = user or ctx.author
 
-    memories = bot.db.get_memories(guild_id, target.id, limit=10)
+    memories = bot.db.get_memories(guild_id, target.id, limit=10, cross_server=True)
 
     if memories:
         memories_text = "\n".join(
             f"**[{m['memory_type']}]** {m['content'][:80]}..."
             for m in memories[:10]
         )
-        await ctx.send(f"🧠 Memories about {target.display_name}:\n{memories_text}")
+        await ctx.send(f"🧠 Memories about {target.display_name} (cross-server):\n{memories_text}")
     else:
         await ctx.send(f"Lily hasn't formed any memories about {target.display_name} yet.")
+
+
+@bot.command(name="lily_dream", aliases=["dream"])
+async def prefix_dream(ctx):
+    """Lily shares one of her dreams."""
+    dreams = bot.db.get_dreams(count=5)
+    if not dreams:
+        await ctx.send("Lily hasn't had any dreams yet... she'll write some tonight! 🌙")
+        return
+
+    dream = random.choice(dreams)
+    embed = discord.Embed(
+        title="🌙 Lily's Dream",
+        description=dream.get("dream_text", "")[:2000],
+        color=discord.Color.purple(),
+    )
+    embed.set_footer(text=f"Dream mood: {dream.get('mood', 'dreamy')} | Dream Journal ✨")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="lily_dreams", aliases=["dreams"])
+async def prefix_dreams(ctx):
+    """See Lily's dream journal."""
+    dreams = bot.db.get_dreams(count=5)
+    if not dreams:
+        await ctx.send("Lily hasn't had any dreams yet... she'll write some tonight! 🌙")
+        return
+
+    embed = discord.Embed(
+        title="📖 Lily's Dream Journal",
+        description="Lily's recent dreams... ✨",
+        color=discord.Color.purple(),
+    )
+    for d in dreams[:5]:
+        date = d.get("created_at", "unknown")[:10]
+        mood = d.get("mood", "dreamy")
+        text = d.get("dream_text", "")[:150]
+        if len(d.get("dream_text", "")) > 150:
+            text += "..."
+        embed.add_field(name=f"🌙 {date} ({mood})", value=text, inline=False)
+
+    embed.set_footer(text="Lily dreams every night... 🌙")
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="lily_channel", aliases=["channel"])
@@ -745,8 +992,8 @@ async def prefix_settings(ctx):
     embed.add_field(
         name="Models",
         value=(
-            f"Text: `{settings.get('text_model', 'openai')}`\n"
-            f"Image: `{settings.get('image_model', 'flux')}`\n"
+            f"Text: `{settings.get('text_model', 'openai-fast')}`\n"
+            f"Image: `{settings.get('image_model', 'sana')}`\n"
         ),
         inline=True,
     )
@@ -758,6 +1005,7 @@ async def prefix_settings(ctx):
             f"Reaction: {settings.get('reaction_chance', 0.40):.0%}\n"
             f"Proactive DMs: {'✅' if settings.get('proactive_dm_enabled', 1) else '❌'}\n"
             f"Daily Recaps: {'✅' if settings.get('daily_recap_enabled', 1) else '❌'}\n"
+            f"Dream Journal: {'✅' if settings.get('dream_journal_enabled', 1) else '❌'}\n"
         ),
         inline=True,
     )
@@ -778,6 +1026,9 @@ if __name__ == "__main__":
     print(f"   Admin IDs: {ADMIN_IDS}")
     print(f"   Proactive DMs: {'enabled' if PROACTIVE_DM_ENABLED else 'disabled'}")
     print(f"   Daily Recaps: {'enabled' if DAILY_RECAP_ENABLED else 'disabled'}")
+    print(f"   Dream Journal: {'enabled' if DREAM_JOURNAL_ENABLED else 'disabled'}")
+    print(f"   Mood Status: {'enabled' if MOOD_STATUS_ENABLED else 'disabled'}")
+    print(f"   Cross-Server Memories: enabled")
 
     try:
         bot.run(DISCORD_TOKEN, log_handler=None)

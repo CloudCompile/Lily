@@ -14,7 +14,7 @@ import hashlib
 import io
 import json
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from pathlib import Path
 
 import aiohttp
@@ -438,5 +438,3 @@ class PollinationsAPI:
         return hashlib.sha256(prompt.encode()).hexdigest()[:16]
 
 
-# Fix the missing import
-from typing import Union

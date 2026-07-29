@@ -5,6 +5,7 @@ Lily v8.5 — Configuration Module
 
 Loads settings from environment variables / .env file.
 Supports per-guild overrides stored in the database.
+v8.5: Updated defaults for cheap models (Sana Sprint, openai-fast).
 """
 
 from __future__ import annotations
@@ -32,9 +33,11 @@ ADMIN_IDS: list[int] = [
 # ── Bot behaviour ────────────────────────────────────────
 BOT_PREFIX: str = os.getenv("BOT_PREFIX", "!lily")
 
-# ── Default model selections (v8.5: smart model routing) ─
-DEFAULT_TEXT_MODEL: str = os.getenv("DEFAULT_TEXT_MODEL", "openai")
-DEFAULT_IMAGE_MODEL: str = os.getenv("DEFAULT_IMAGE_MODEL", "flux")
+# ── Default model selections (v8.5: cheap models by default) ─
+# Sana Sprint for images (0.0001/gen — dirt cheap!)
+# openai-fast for text (free tier!)
+DEFAULT_TEXT_MODEL: str = os.getenv("DEFAULT_TEXT_MODEL", "openai-fast")
+DEFAULT_IMAGE_MODEL: str = os.getenv("DEFAULT_IMAGE_MODEL", "sana")
 
 # ── Personality defaults ─────────────────────────────────
 MAX_CONV_MEMORY: int = 50
@@ -50,6 +53,15 @@ PROACTIVE_DM_ENABLED: bool = os.getenv("PROACTIVE_DM_ENABLED", "true").lower() =
 # ── Daily recap settings ────────────────────────────────
 DAILY_RECAP_HOUR: int = int(os.getenv("DAILY_RECAP_HOUR", "23"))  # When to generate recaps
 DAILY_RECAP_ENABLED: bool = os.getenv("DAILY_RECAP_ENABLED", "true").lower() == "true"
+
+# ── Dream journal settings ───────────────────────────────
+DREAM_JOURNAL_ENABLED: bool = os.getenv("DREAM_JOURNAL_ENABLED", "true").lower() == "true"
+DREAM_JOURNAL_HOUR: int = int(os.getenv("DREAM_JOURNAL_HOUR", "3"))  # When Lily dreams (3 AM)
+DREAM_JOURNAL_MAX_PER_DAY: int = 2  # Max dreams per day
+
+# ── Mood-reactive status ────────────────────────────────
+MOOD_STATUS_ENABLED: bool = os.getenv("MOOD_STATUS_ENABLED", "true").lower() == "true"
+MOOD_STATUS_INTERVAL: int = int(os.getenv("MOOD_STATUS_INTERVAL", "300"))  # Update every 5 min
 
 # ── Data paths ───────────────────────────────────────────
 DATA_DIR = Path("data")

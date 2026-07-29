@@ -4,7 +4,7 @@
 Lily v8.5 — Core Bot Cog
 
 Essential commands: help, status, mood, ping, info.
-Updated for v8.5 with relationship awareness.
+v8.5: Dream journal, mood-reactive status, cross-server memories.
 """
 
 from __future__ import annotations
@@ -16,7 +16,11 @@ from database import Database
 from pollinations import PollinationsAPI
 from personality import MoodSystem, PersonalityEngine, DecisionEngine
 from relationships import RelationshipEngine
-from config import ADMIN_IDS, BOT_PREFIX, POLLINATIONS_KEY, PROACTIVE_DM_ENABLED, DAILY_RECAP_ENABLED
+from config import (
+    ADMIN_IDS, BOT_PREFIX, POLLINATIONS_KEY,
+    PROACTIVE_DM_ENABLED, DAILY_RECAP_ENABLED,
+    DREAM_JOURNAL_ENABLED, MOOD_STATUS_ENABLED,
+)
 
 
 class CoreCog(commands.Cog, name="Core"):
@@ -30,7 +34,7 @@ class CoreCog(commands.Cog, name="Core"):
         """Show all available commands."""
         embed = discord.Embed(
             title="🌸 Lily v8.5 — Command Guide",
-            description="Lily is a multi-server AI bot who actually feels real. She remembers you, has feelings, and will reach out to you.",
+            description="Lily is a multi-server AI bot who actually feels real. She remembers you across ALL servers, has feelings, writes dreams, and will reach out to you.",
             color=discord.Color.pink(),
         )
 
@@ -51,7 +55,7 @@ class CoreCog(commands.Cog, name="Core"):
         embed.add_field(
             name="🖼️ Image Generation",
             value=(
-                "`/image <prompt>` — Generate an image\n"
+                "`/image <prompt>` — Generate an image (Sana Sprint!)\n"
                 "`/image_advanced <prompt> ...` — Generate with full options\n"
                 "`/image_edit <prompt>` — Edit an attached image"
             ),
@@ -68,6 +72,16 @@ class CoreCog(commands.Cog, name="Core"):
                 "`/recaps` — See Lily's diary entries about you\n"
                 "`/remember <what>` — Tell Lily to remember something\n"
                 "`/forget <what>` — Ask Lily to forget something"
+            ),
+            inline=False,
+        )
+
+        # Dream Journal
+        embed.add_field(
+            name="🌙 Dream Journal",
+            value=(
+                "`/dream` — Lily shares a dream with you\n"
+                "`/dream_journal` — See Lily's dream journal"
             ),
             inline=False,
         )
@@ -94,12 +108,13 @@ class CoreCog(commands.Cog, name="Core"):
                 "`/server_settings` — View server settings\n"
                 "`/toggle_proactive` — Toggle proactive DMs\n"
                 "`/toggle_recaps` — Toggle daily recaps\n"
+                "`/toggle_dreams` — Toggle dream journal\n"
                 "`/reset_user <user>` — Reset user memory (admin)"
             ),
             inline=False,
         )
 
-        embed.set_footer(text="Lily v8.5 — She lives 💕 • Powered by Pollinations API")
+        embed.set_footer(text="Lily v8.5 — She lives 💕 | Cross-server memories ✨ | Sana Sprint images 🖼️")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="ping", description="Check Lily's response time")
@@ -119,6 +134,10 @@ class CoreCog(commands.Cog, name="Core"):
         energy = personality.mood.get_energy()
         desc = personality.mood.get_mood_description()
 
+        # Get the current status text
+        status_config = personality.mood.get_discord_status()
+        status_text = status_config.get("text", "✨ daydreaming...")
+
         embed = discord.Embed(
             title=f"{emoji} Lily's Mood",
             color=discord.Color.pink(),
@@ -126,7 +145,6 @@ class CoreCog(commands.Cog, name="Core"):
         embed.add_field(name="Mood", value=mood_name.capitalize(), inline=True)
         embed.add_field(name="Intensity", value=f"{intensity:.0%}", inline=True)
         embed.add_field(name="Energy", value=f"{energy:.0%}", inline=True)
-        embed.description = desc
 
         mood_descriptions = {
             "sleepy": "Feeling drowsy... might need a nap 💤",
@@ -137,6 +155,8 @@ class CoreCog(commands.Cog, name="Core"):
             "dreamy": "Lost in thought... ✨",
         }
         embed.description = mood_descriptions.get(mood_name, "Feeling alright!")
+        embed.add_field(name="Discord Status", value=status_text, inline=False)
+        embed.set_footer(text="Her mood changes with the time of day! 💕")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="info", description="Show bot information")
@@ -147,16 +167,20 @@ class CoreCog(commands.Cog, name="Core"):
 
         embed = discord.Embed(
             title="🌸 Lily v8.5 — Lily Lives",
-            description="Multi-server AI Discord Bot who actually feels real. She remembers you, has feelings, and will reach out to you.",
+            description="Multi-server AI Discord Bot who actually feels real. She remembers you across ALL servers, has feelings, writes dreams, and will reach out to you.",
             color=discord.Color.pink(),
         )
         embed.add_field(name="Servers", value=str(guild_count), inline=True)
         embed.add_field(name="API", value="Pollinations", inline=True)
-        embed.add_field(name="Features", value="Text, Image, Relationships, Memories, Proactive DMs", inline=False)
+        embed.add_field(name="Image Model", value="Sana Sprint (0.0001/gen!)", inline=True)
+        embed.add_field(name="Features", value="Text, Image, Relationships, Memories, Proactive DMs, Dream Journal, Mood Status", inline=False)
         embed.add_field(name="Proactive DMs", value="✅" if PROACTIVE_DM_ENABLED else "❌", inline=True)
         embed.add_field(name="Daily Recaps", value="✅" if DAILY_RECAP_ENABLED else "❌", inline=True)
+        embed.add_field(name="Dream Journal", value="✅" if DREAM_JOURNAL_ENABLED else "❌", inline=True)
+        embed.add_field(name="Mood Status", value="✅" if MOOD_STATUS_ENABLED else "❌", inline=True)
+        embed.add_field(name="Cross-Server Mem", value="✅", inline=True)
         embed.add_field(name="Smart Routing", value="✅", inline=True)
-        embed.set_footer(text="Lily v8.5 — She lives 💕 • github.com/cloudcompile/Lily")
+        embed.set_footer(text="Lily v8.5 — She lives 💕 | github.com/cloudcompile/Lily")
         await interaction.response.send_message(embed=embed)
 
 

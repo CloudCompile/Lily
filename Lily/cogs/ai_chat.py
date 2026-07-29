@@ -4,7 +4,7 @@
 Lily v8.5 — AI Chat Cog
 
 Text generation commands with smart model routing, relationship awareness,
-and memory integration. She feels like a real person.
+and memory integration. v8.5: Cross-server memories, cheap models by default.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         rel = rel_engine.get_relationship(guild_id, user_id)
         warmth = rel.warmth
 
-        # Check quota
+        # Check quota (casual chat is free with openai-fast)
         can_gen, reason = quotas.can_generate(guild_id, user_id, "text_casual", rel.relationship_tier)
         if not can_gen:
             await interaction.followup.send(f"❌ {reason}", ephemeral=True)
@@ -65,12 +65,13 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         use_model = model or await self.bot.get_model_for_task("casual_chat", guild_id)
         safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
 
-        # Build context
+        # Build context — cross-server memories
         history = db.get_conversations(guild_id, user_id, limit=15)
-        user_facts = db.get_facts(guild_id, user_id)
+        user_facts = db.get_facts(guild_id, user_id, cross_server=True)
         recent_recaps = db.get_daily_recaps(guild_id, user_id, 3)
         memory_context = memories.get_memories_for_prompt(guild_id, user_id, question)
         relationship_context = rel_engine.get_system_prompt_addition(guild_id, user_id)
+        dream_context = memories.get_dreams_for_prompt(user_id)
 
         # Update mood
         mood, intensity = personality.mood.update(question)
@@ -78,6 +79,7 @@ class AIChatCog(commands.Cog, name="AI Chat"):
             mood, personality.mood.get_energy(),
             user_facts, relationship_context, memory_context,
             [r.get("recap_text", "") for r in recent_recaps] if recent_recaps else None,
+            dream_context,
         )
 
         # Build messages
@@ -114,15 +116,16 @@ class AIChatCog(commands.Cog, name="AI Chat"):
             for topic in topics:
                 db.add_topic(guild_id, user_id, topic)
 
-            # Save important memories
+            # Save important memories (cross-server)
             emotion = personality.detect_emotion(question)
             if emotion in ("happy", "sad", "affection", "vulnerable", "excited"):
                 db.save_memory(guild_id, user_id, question, memory_type="auto",
-                             emotion=emotion, importance=0.7, tags=topics)
+                             emotion=emotion, importance=0.7, tags=topics, is_global=True)
 
-            # Record generation
-            quotas.record_generation(guild_id, user_id, "text_casual", rel.relationship_tier)
-            db.log_generation(guild_id, user_id, "text", use_model, question[:50])
+            # Record generation with actual cost
+            cost = self.bot.model_router.estimate_cost(use_model, len(question.split()) * 2, len(response.split()) * 2)
+            quotas.record_generation(guild_id, user_id, "text_casual", rel.relationship_tier, actual_cost=cost)
+            db.log_generation(guild_id, user_id, "text", use_model, question[:50], cost_pollen=cost)
 
             # Truncate response if too long
             if len(response) > 2000:
@@ -169,18 +172,20 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         use_model = model or await self.bot.get_model_for_task(task, guild_id)
         safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
 
-        # Build context
+        # Build context — cross-server
         history = db.get_conversations(guild_id, user_id, limit=15)
-        user_facts = db.get_facts(guild_id, user_id)
+        user_facts = db.get_facts(guild_id, user_id, cross_server=True)
         recent_recaps = db.get_daily_recaps(guild_id, user_id, 3)
         memory_context = memories.get_memories_for_prompt(guild_id, user_id, message)
         relationship_context = rel_engine.get_system_prompt_addition(guild_id, user_id)
+        dream_context = memories.get_dreams_for_prompt(user_id)
 
         mood, _ = personality.mood.update(message)
         system_prompt = personality.build_system_prompt(
             mood, personality.mood.get_energy(),
             user_facts, relationship_context, memory_context,
             [r.get("recap_text", "") for r in recent_recaps] if recent_recaps else None,
+            dream_context,
         )
 
         api_messages = [{"role": "system", "content": system_prompt}]
@@ -211,10 +216,11 @@ class AIChatCog(commands.Cog, name="AI Chat"):
             emotion = personality.detect_emotion(message)
             if emotion in ("happy", "sad", "affection", "vulnerable", "excited"):
                 db.save_memory(guild_id, user_id, message, memory_type="auto",
-                             emotion=emotion, importance=0.7, tags=topics)
+                             emotion=emotion, importance=0.7, tags=topics, is_global=True)
 
-            quotas.record_generation(guild_id, user_id, "text_casual", rel.relationship_tier)
-            db.log_generation(guild_id, user_id, "text", use_model, message[:50])
+            cost = self.bot.model_router.estimate_cost(use_model, len(message.split()) * 2, len(response.split()) * 2)
+            quotas.record_generation(guild_id, user_id, "text_casual", rel.relationship_tier, actual_cost=cost)
+            db.log_generation(guild_id, user_id, "text", use_model, message[:50], cost_pollen=cost)
 
             if len(response) > 2000:
                 response = response[:1997] + "..."
@@ -268,8 +274,9 @@ class AIChatCog(commands.Cog, name="AI Chat"):
                 safe=safe,
             )
 
-            quotas.record_generation(guild_id, user_id, "text_standard", rel.relationship_tier)
-            db.log_generation(guild_id, user_id, "text", use_model, prompt[:50])
+            cost = self.bot.model_router.estimate_cost(use_model, len(prompt.split()) * 2, len(response.split()) * 2)
+            quotas.record_generation(guild_id, user_id, "text_standard", rel.relationship_tier, actual_cost=cost)
+            db.log_generation(guild_id, user_id, "text", use_model, prompt[:50], cost_pollen=cost)
 
             if len(response) > 2000:
                 chunks = [response[i:i+2000] for i in range(0, len(response), 2000)]
@@ -309,7 +316,7 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         user_id = interaction.user.id
         rel = rel_engine.get_relationship(guild_id, user_id)
 
-        can_gen, reason = quotas.can_generate(guild_id, user_id, "image_analysis", rel.relationship_tier)
+        can_gen, reason = quotas.can_generate(guild_id, user_id, "text_standard", rel.relationship_tier)
         if not can_gen:
             await interaction.followup.send(f"❌ {reason}", ephemeral=True)
             return
@@ -319,8 +326,9 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         try:
             response = await api.analyze_image(image_url, question, model=use_model)
 
-            quotas.record_generation(guild_id, user_id, "text_standard", rel.relationship_tier)
-            db.log_generation(guild_id, user_id, "image_analysis", use_model, question[:50])
+            cost = self.bot.model_router.estimate_cost(use_model, 500, 200)
+            quotas.record_generation(guild_id, user_id, "text_standard", rel.relationship_tier, actual_cost=cost)
+            db.log_generation(guild_id, user_id, "image_analysis", use_model, question[:50], cost_pollen=cost)
 
             if len(response) > 2000:
                 response = response[:1997] + "..."
@@ -383,8 +391,9 @@ class AIChatCog(commands.Cog, name="AI Chat"):
                 max_tokens=1000,
             )
 
-            quotas.record_generation(guild_id, user_id, "translation", rel.relationship_tier)
-            db.log_generation(guild_id, user_id, "translation", use_model, text[:50])
+            cost = self.bot.model_router.estimate_cost(use_model, len(text.split()) * 2, len(response.split()) * 2)
+            quotas.record_generation(guild_id, user_id, "translation", rel.relationship_tier, actual_cost=cost)
+            db.log_generation(guild_id, user_id, "translation", use_model, text[:50], cost_pollen=cost)
 
             embed = discord.Embed(
                 title=f"🌐 Translation to {language}",

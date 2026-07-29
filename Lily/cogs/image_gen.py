@@ -4,7 +4,7 @@
 Lily v8.5 — Image Generation Cog
 
 Commands: /image, /image_advanced, /image_edit.
-With generation quotas and smart model routing.
+v8.5: Sana Sprint by default (0.0001/gen!), actual cost tracking.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
     @app_commands.command(name="image", description="Generate an image from a prompt")
     @app_commands.describe(
         prompt="Description of the image to generate",
-        model="Image model (flux, sana, gptimage, seedream5, etc.)",
+        model="Image model (sana=cheap, flux=quality, gptimage=pro)",
         width="Width in pixels (default: 1024)",
         height="Height in pixels (default: 1024)",
     )
@@ -42,7 +42,7 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
         width: int = 1024,
         height: int = 1024,
     ):
-        """Generate an image from a text prompt."""
+        """Generate an image from a text prompt. Sana Sprint by default!"""
         await interaction.response.defer(thinking=True)
 
         guild_id = interaction.guild_id or 0
@@ -54,13 +54,21 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
         user_id = interaction.user.id
         rel = rel_engine.get_relationship(guild_id, user_id)
 
+        # Determine gen type based on model
+        use_model = model or db.get_guild_setting(guild_id, "image_model", DEFAULT_IMAGE_MODEL)
+        if use_model == "sana":
+            gen_type = "image_quick"     # 0.0001 pollen
+        elif use_model in ("flux",):
+            gen_type = "image_standard"  # 0.003 pollen
+        else:
+            gen_type = "image_pro"       # 0.01 pollen
+
         # Check quota
-        can_gen, reason = quotas.can_generate(guild_id, user_id, "image_standard", rel.relationship_tier)
+        can_gen, reason = quotas.can_generate(guild_id, user_id, gen_type, rel.relationship_tier)
         if not can_gen:
             await interaction.followup.send(f"❌ {reason}", ephemeral=True)
             return
 
-        use_model = model or db.get_guild_setting(guild_id, "image_model", DEFAULT_IMAGE_MODEL)
         safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
 
         # Record action
@@ -82,19 +90,23 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
                 color=discord.Color.pink(),
             )
             embed.set_image(url="attachment://lily_image.png")
-            embed.set_footer(text=f"Model: {use_model} | {width}x{height}")
+
+            # Show actual cost
+            actual_cost = self.bot.model_router.estimate_image_cost(use_model)
+            embed.set_footer(text=f"Model: {use_model} | {width}x{height} | Cost: {actual_cost:.4f} pollen")
 
             await interaction.followup.send(embed=embed, file=file)
 
-            # Log and quota
-            quotas.record_generation(guild_id, user_id, "image_standard", rel.relationship_tier)
-            db.log_generation(guild_id, user_id, "image", use_model, prompt[:50])
+            # Log and quota with actual cost
+            quotas.record_generation(guild_id, user_id, gen_type, rel.relationship_tier, actual_cost=actual_cost)
+            db.log_generation(guild_id, user_id, "image", use_model, prompt[:50], cost_pollen=actual_cost)
 
-            # Save as a memory
+            # Save as a memory (cross-server)
             db.save_memory(
                 guild_id, user_id, f"Generated image: {prompt[:100]}",
                 memory_type="episodic", emotion="creative",
-                importance=0.4, tags=["image_generation"]
+                importance=0.4, tags=["image_generation"],
+                is_global=True
             )
 
         except Exception as e:
@@ -105,7 +117,7 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
     @app_commands.command(name="image_advanced", description="Generate image with advanced options")
     @app_commands.describe(
         prompt="Description of the image",
-        model="Image model to use",
+        model="Image model to use (sana, flux, gptimage, kontext)",
         width="Width in pixels",
         height="Height in pixels",
         seed="Seed for reproducible results (-1 for random)",
@@ -116,7 +128,7 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
         self,
         interaction: discord.Interaction,
         prompt: str,
-        model: str = "flux",
+        model: str = "sana",
         width: int = 1024,
         height: int = 1024,
         seed: int = 0,
@@ -135,8 +147,14 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
         user_id = interaction.user.id
         rel = rel_engine.get_relationship(guild_id, user_id)
 
-        # Check quota (pro images cost more)
-        gen_type = "image_pro" if quality in ("high", "hd") else "image_standard"
+        # Determine gen type based on model and quality
+        if model == "sana":
+            gen_type = "image_quick"
+        elif quality in ("high", "hd") or model in ("gptimage",):
+            gen_type = "image_pro"
+        else:
+            gen_type = "image_standard"
+
         can_gen, reason = quotas.can_generate(guild_id, user_id, gen_type, rel.relationship_tier)
         if not can_gen:
             await interaction.followup.send(f"❌ {reason}", ephemeral=True)
@@ -163,7 +181,8 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
                 color=discord.Color.pink(),
             )
             embed.set_image(url="attachment://lily_image.png")
-            details = f"Model: {model} | {width}x{height} | Seed: {seed}"
+            actual_cost = self.bot.model_router.estimate_image_cost(model)
+            details = f"Model: {model} | {width}x{height} | Seed: {seed} | Cost: {actual_cost:.4f} pollen"
             if quality != "medium":
                 details += f" | Quality: {quality}"
             if enhance:
@@ -172,8 +191,8 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
 
             await interaction.followup.send(embed=embed, file=file)
 
-            quotas.record_generation(guild_id, user_id, gen_type, rel.relationship_tier)
-            db.log_generation(guild_id, user_id, "image", model, prompt[:50])
+            quotas.record_generation(guild_id, user_id, gen_type, rel.relationship_tier, actual_cost=actual_cost)
+            db.log_generation(guild_id, user_id, "image", model, prompt[:50], cost_pollen=actual_cost)
 
         except Exception as e:
             await interaction.followup.send(
@@ -183,7 +202,7 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
     @app_commands.command(name="image_edit", description="Edit an image with a prompt (attach an image)")
     @app_commands.describe(
         prompt="What to change about the image",
-        model="Image editing model (kontext, gptimage, etc.)",
+        model="Image editing model (kontext, gptimage)",
     )
     async def image_edit(
         self,
@@ -251,8 +270,9 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
             else:
                 await interaction.followup.send("❌ No image was returned from the API.", ephemeral=True)
 
-            quotas.record_generation(guild_id, user_id, "image_edit", rel.relationship_tier)
-            db.log_generation(guild_id, user_id, "image_edit", model, prompt[:50])
+            actual_cost = self.bot.model_router.estimate_image_cost(model)
+            quotas.record_generation(guild_id, user_id, "image_edit", rel.relationship_tier, actual_cost=actual_cost)
+            db.log_generation(guild_id, user_id, "image_edit", model, prompt[:50], cost_pollen=actual_cost)
 
         except Exception as e:
             await interaction.followup.send(
