@@ -66,8 +66,6 @@ log = logging.getLogger("lily")
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
-intents.presences = True      # Required for custom status (mood-reactive)
 intents.reactions = True
 intents.typing = True
 intents.dm_messages = True
@@ -189,7 +187,11 @@ class LilyBot(commands.Bot):
                     continue
 
                 # Check a random subset of members
-                members = [m for m in guild.members if not m.bot and m.id not in ADMIN_IDS]
+                # Requires Server Members Intent — if not enabled, guild.members is empty
+                try:
+                    members = [m for m in guild.members if not m.bot and m.id not in ADMIN_IDS]
+                except Exception:
+                    members = []
                 if not members:
                     continue
 
@@ -522,19 +524,22 @@ class LilyBot(commands.Bot):
 
         # Set initial mood-reactive status
         if MOOD_STATUS_ENABLED:
-            status_config = self.personality.mood.get_discord_status()
-            type_map = {
-                "playing": discord.ActivityType.playing,
-                "listening": discord.ActivityType.listening,
-                "watching": discord.ActivityType.watching,
-            }
-            activity_type = type_map.get(status_config.get("type", "playing"), discord.ActivityType.playing)
-            await self.change_presence(
-                activity=discord.Activity(
-                    type=activity_type,
-                    name=status_config.get("text", "✨ daydreaming... | /help"),
+            try:
+                status_config = self.personality.mood.get_discord_status()
+                type_map = {
+                    "playing": discord.ActivityType.playing,
+                    "listening": discord.ActivityType.listening,
+                    "watching": discord.ActivityType.watching,
+                }
+                activity_type = type_map.get(status_config.get("type", "playing"), discord.ActivityType.playing)
+                await self.change_presence(
+                    activity=discord.Activity(
+                        type=activity_type,
+                        name=status_config.get("text", "✨ daydreaming... | /help"),
+                    )
                 )
-            )
+            except Exception as e:
+                log.warning(f"Could not set mood status (Presence Intent may not be enabled): {e}")
 
     async def on_message(self, message: discord.Message):
         """Handle all messages — the heart of Lily's personality."""
