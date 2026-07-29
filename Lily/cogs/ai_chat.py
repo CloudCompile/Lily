@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Lily v8.0 — AI Chat Cog
+
+Text generation commands: /ask, /chat, /imagine, /analyze, /translate.
+"""
+
+from __future__ import annotations
+import discord
+from discord.ext import commands
+from discord import app_commands
+
+from database import Database
+from pollinations import PollinationsAPI
+from personality import PersonalityEngine
+from config import DEFAULT_TEXT_MODEL, DEFAULT_SAFE_MODE
+
+
+class AIChatCog(commands.Cog, name="AI Chat"):
+    """AI text generation commands."""
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    def _get_guild_model(self, guild_id: int) -> str:
+        """Get the text model for this guild."""
+        db: Database = self.bot.db  # type: ignore
+        return db.get_guild_setting(guild_id, "text_model", DEFAULT_TEXT_MODEL)
+
+    def _get_safe_mode(self, guild_id: int) -> str:
+        """Get the safe mode for this guild."""
+        db: Database = self.bot.db  # type: ignore
+        return db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
+
+    @app_commands.command(name="ask", description="Ask Lily a question")
+    @app_commands.describe(question="Your question", model="AI model to use")
+    async def ask(
+        self,
+        interaction: discord.Interaction,
+        question: str,
+        model: str = None,
+    ):
+        """Ask Lily anything using Pollinations text generation."""
+        await interaction.response.defer(thinking=True)
+
+        guild_id = interaction.guild_id or 0
+        api: PollinationsAPI = self.bot.api  # type: ignore
+        personality: PersonalityEngine = self.bot.personality  # type: ignore
+        db: Database = self.bot.db  # type: ignore
+
+        use_model = model or self._get_guild_model(guild_id)
+        safe = self._get_safe_mode(guild_id)
+
+        # Build context with conversation history
+        user_id = interaction.user.id
+        history = db.get_conversations(guild_id, user_id, limit=15)
+        user_facts = db.get_facts(guild_id, user_id)
+
+        # Update mood
+        mood, intensity = personality.mood.update(question)
+        system_prompt = personality.build_system_prompt(mood, personality.mood.get_energy(), user_facts)
+
+        # Build messages
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in history:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": question})
+
+        try:
+            response = await api.chat_completions_simple(
+                messages, model=use_model, safe=safe, max_tokens=500
+            )
+            # Inject personality quirks
+            response = personality.inject_personality(response)
+
+            # Save to conversation history
+            db.add_conversation(guild_id, user_id, "user", question)
+            db.add_conversation(guild_id, user_id, "assistant", response)
+
+            # Track topics
+            topics = personality.extract_topics(question)
+            for topic in topics:
+                db.add_topic(guild_id, user_id, topic)
+
+            # Truncate response if too long for Discord
+            if len(response) > 2000:
+                response = response[:1997] + "..."
+
+            await interaction.followup.send(response)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Failed to generate response: {str(e)[:200]}", ephemeral=True
+            )
+
+    @app_commands.command(name="chat", description="Have a conversation with Lily")
+    @app_commands.describe(message="Your message", model="AI model to use")
+    async def chat(
+        self,
+        interaction: discord.Interaction,
+        message: str,
+        model: str = None,
+    ):
+        """Have a conversation with Lily using full context."""
+        await interaction.response.defer(thinking=True)
+
+        guild_id = interaction.guild_id or 0
+        api: PollinationsAPI = self.bot.api  # type: ignore
+        personality: PersonalityEngine = self.bot.personality  # type: ignore
+        db: Database = self.bot.db  # type: ignore
+
+        use_model = model or self._get_guild_model(guild_id)
+        safe = self._get_safe_mode(guild_id)
+        user_id = interaction.user.id
+
+        # Build context
+        history = db.get_conversations(guild_id, user_id, limit=15)
+        user_facts = db.get_facts(guild_id, user_id)
+        mood, _ = personality.mood.update(message)
+        system_prompt = personality.build_system_prompt(mood, personality.mood.get_energy(), user_facts)
+
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in history:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": message})
+
+        try:
+            response = await api.chat_completions_simple(
+                messages, model=use_model, safe=safe, max_tokens=500
+            )
+            response = personality.inject_personality(response)
+
+            db.add_conversation(guild_id, user_id, "user", message)
+            db.add_conversation(guild_id, user_id, "assistant", response)
+
+            topics = personality.extract_topics(message)
+            for topic in topics:
+                db.add_topic(guild_id, user_id, topic)
+
+            if len(response) > 2000:
+                response = response[:1997] + "..."
+
+            await interaction.followup.send(response)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Failed to generate response: {str(e)[:200]}", ephemeral=True
+            )
+
+    @app_commands.command(name="imagine", description="Generate creative text from a prompt")
+    @app_commands.describe(
+        prompt="What to imagine",
+        model="AI model to use",
+        system="System instructions",
+        temperature="Creativity (0.0-2.0)",
+    )
+    async def imagine(
+        self,
+        interaction: discord.Interaction,
+        prompt: str,
+        model: str = None,
+        system: str = None,
+        temperature: float = None,
+    ):
+        """Creative text generation using the simple GET endpoint."""
+        await interaction.response.defer(thinking=True)
+
+        guild_id = interaction.guild_id or 0
+        api: PollinationsAPI = self.bot.api  # type: ignore
+        use_model = model or self._get_guild_model(guild_id)
+        safe = self._get_safe_mode(guild_id)
+
+        try:
+            response = await api.text_simple(
+                prompt,
+                model=use_model,
+                system=system or "You are a creative writer. Be vivid and imaginative.",
+                temperature=temperature,
+                safe=safe,
+            )
+
+            if len(response) > 2000:
+                # Split into multiple messages
+                chunks = [response[i:i+2000] for i in range(0, len(response), 2000)]
+                await interaction.followup.send(chunks[0])
+                for chunk in chunks[1:]:
+                    await interaction.channel.send(chunk)
+            else:
+                await interaction.followup.send(response)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Failed to generate: {str(e)[:200]}", ephemeral=True
+            )
+
+    @app_commands.command(name="analyze", description="Analyze an image using AI vision")
+    @app_commands.describe(
+        image_url="URL of the image to analyze",
+        question="What do you want to know about the image?",
+        model="Vision-capable model to use",
+    )
+    async def analyze(
+        self,
+        interaction: discord.Interaction,
+        image_url: str,
+        question: str = "What is in this image?",
+        model: str = "openai",
+    ):
+        """Analyze an image using a vision-capable model."""
+        await interaction.response.defer(thinking=True)
+
+        api: PollinationsAPI = self.bot.api  # type: ignore
+
+        try:
+            response = await api.analyze_image(image_url, question, model=model)
+
+            if len(response) > 2000:
+                response = response[:1997] + "..."
+
+            embed = discord.Embed(
+                title="🔍 Image Analysis",
+                description=response,
+                color=discord.Color.blue(),
+            )
+            embed.set_thumbnail(url=image_url)
+            embed.set_footer(text=f"Model: {model}")
+            await interaction.followup.send(embed=embed)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Failed to analyze image: {str(e)[:200]}", ephemeral=True
+            )
+
+    @app_commands.command(name="translate", description="Translate text to another language")
+    @app_commands.describe(
+        text="Text to translate",
+        language="Target language (e.g. Spanish, French, Japanese)",
+        model="AI model to use",
+    )
+    async def translate(
+        self,
+        interaction: discord.Interaction,
+        text: str,
+        language: str,
+        model: str = None,
+    ):
+        """Translate text using AI."""
+        await interaction.response.defer(thinking=True)
+
+        guild_id = interaction.guild_id or 0
+        api: PollinationsAPI = self.bot.api  # type: ignore
+        use_model = model or self._get_guild_model(guild_id)
+
+        system_prompt = f"You are a professional translator. Translate the following text to {language}. Only output the translation, nothing else."
+
+        try:
+            response = await api.chat_completions_simple(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": text},
+                ],
+                model=use_model,
+                max_tokens=1000,
+            )
+
+            embed = discord.Embed(
+                title=f"🌐 Translation to {language}",
+                color=discord.Color.green(),
+            )
+            embed.add_field(name="Original", value=text[:1024], inline=False)
+            embed.add_field(name="Translation", value=response[:1024], inline=False)
+            embed.set_footer(text=f"Model: {use_model}")
+            await interaction.followup.send(embed=embed)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Failed to translate: {str(e)[:200]}", ephemeral=True
+            )
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(AIChatCog(bot))
