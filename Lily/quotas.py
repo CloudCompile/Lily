@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Generation Quota System
+Lily v9.0 — Generation Quota System
 
 Not unlimited willy-nilly generations. Each user gets a daily pollen budget.
 Rations are based on relationship tier and server settings.
 
-v8.5 update: Costs are now based on actual model pricing.
+v9.0 update: Costs are now based on actual model pricing.
   - Sana Sprint images: 0.0001 pollen/gen (basically free)
   - Ling 3.0 flash text: 0.1/M tokens (super cheap)
   - Free models (openai-fast, nemotron): 0 pollen

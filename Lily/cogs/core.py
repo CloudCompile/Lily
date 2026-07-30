@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Core Bot Cog
+Lily v9.0 — Core Bot Cog
 
 Essential commands: help, status, mood, ping, info.
-v8.5: Dream journal, mood-reactive status, cross-server memories.
+v9.0: Dream journal, mood-reactive status, cross-server memories.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ class CoreCog(commands.Cog, name="Core"):
     async def help_slash(self, interaction: discord.Interaction):
         """Show all available commands."""
         embed = discord.Embed(
-            title="🌸 Lily v8.5 — Command Guide",
+            title="🌸 Lily v9.0 — Command Guide",
             description="Lily is a multi-server AI bot who actually feels real. She remembers you across ALL servers, has feelings, writes dreams, and will reach out to you.",
             color=discord.Color.pink(),
         )
@@ -114,7 +114,7 @@ class CoreCog(commands.Cog, name="Core"):
             inline=False,
         )
 
-        embed.set_footer(text="Lily v8.5 — She lives 💕 | Cross-server memories ✨ | Sana Sprint images 🖼️")
+        embed.set_footer(text="Lily v9.0 — She lives 💕 | Cross-server memories ✨ | Sana Sprint images 🖼️")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="ping", description="Check Lily's response time")
@@ -166,7 +166,7 @@ class CoreCog(commands.Cog, name="Core"):
         guild_count = len(self.bot.guilds)
 
         embed = discord.Embed(
-            title="🌸 Lily v8.5 — Lily Lives",
+            title="🌸 Lily v9.0 — Lily Lives",
             description="Multi-server AI Discord Bot who actually feels real. She remembers you across ALL servers, has feelings, writes dreams, and will reach out to you.",
             color=discord.Color.pink(),
         )
@@ -180,7 +180,7 @@ class CoreCog(commands.Cog, name="Core"):
         embed.add_field(name="Mood Status", value="✅" if MOOD_STATUS_ENABLED else "❌", inline=True)
         embed.add_field(name="Cross-Server Mem", value="✅", inline=True)
         embed.add_field(name="Smart Routing", value="✅", inline=True)
-        embed.set_footer(text="Lily v8.5 — She lives 💕 | github.com/cloudcompile/Lily")
+        embed.set_footer(text="Lily v9.0 — She lives 💕 | github.com/cloudcompile/Lily")
         await interaction.response.send_message(embed=embed)
 
 

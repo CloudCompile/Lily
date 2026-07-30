@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Multi-Server Database Module
+Lily v9.0 — Multi-Server Database Module
 
 SQLite database with per-guild configuration support.
-v8.5: Cross-server memories (global by user_id), dream journal, mood status tracking.
+v9.0: Cross-server memories (global by user_id), dream journal, mood status tracking.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from config import DB_PATH, DATA_DIR
 
 
 class Database:
-    """Thread-safe multi-server SQLite database for Lily v8.5."""
+    """Thread-safe multi-server SQLite database for Lily v9.0."""
 
     def __init__(self, db_path: Path = DB_PATH):
         DATA_DIR.mkdir(exist_ok=True)
@@ -100,7 +100,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_topics_guild_user
                 ON conversation_topics(guild_id, user_id);
 
-            -- v8.5: Per-user relationships (CROSS-SERVER — global by user_id)
+            -- v9.0: Per-user relationships (CROSS-SERVER — global by user_id)
             CREATE TABLE IF NOT EXISTS relationships (
                 user_id               TEXT NOT NULL,
                 guild_id              TEXT NOT NULL DEFAULT '0',
@@ -121,7 +121,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_rel_user
                 ON relationships(user_id);
 
-            -- v8.5: Long-term memories (CROSS-SERVER — global by user_id)
+            -- v9.0: Long-term memories (CROSS-SERVER — global by user_id)
             -- Memories carry across ALL servers. Lily remembers you everywhere.
             CREATE TABLE IF NOT EXISTS memories (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,7 +142,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_memories_global
                 ON memories(user_id, is_global);
 
-            -- v8.5: Daily recaps (CROSS-SERVER — global by user_id)
+            -- v9.0: Daily recaps (CROSS-SERVER — global by user_id)
             CREATE TABLE IF NOT EXISTS daily_recaps (
                 id         INTEGER UNIQUE,
                 user_id    TEXT NOT NULL,
@@ -155,7 +155,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_recaps_user
                 ON daily_recaps(user_id);
 
-            -- v8.5: Dream Journal (CROSS-SERVER — Lily's dreams are hers everywhere)
+            -- v9.0: Dream Journal (CROSS-SERVER — Lily's dreams are hers everywhere)
             CREATE TABLE IF NOT EXISTS dream_journal (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id     TEXT NOT NULL DEFAULT '0',
@@ -182,7 +182,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_genlog_guild
                 ON generation_log(guild_id, created_at);
 
-            -- v8.5: Generation quotas (per-user, per-guild, per-day)
+            -- v9.0: Generation quotas (per-user, per-guild, per-day)
             CREATE TABLE IF NOT EXISTS generation_quotas (
                 guild_id      TEXT NOT NULL DEFAULT '0',
                 user_id       TEXT NOT NULL,
@@ -200,6 +200,19 @@ class Database:
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            -- Bot-to-bot interaction log (Lily <-> NullVector conversations)
+            CREATE TABLE IF NOT EXISTS bot_interactions (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id     TEXT NOT NULL,
+                channel_id   TEXT NOT NULL,
+                speaker      TEXT NOT NULL DEFAULT 'lily',
+                partner_id   TEXT NOT NULL,
+                content      TEXT NOT NULL,
+                created_at   TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_bot_inter_guild
+                ON bot_interactions(guild_id, created_at);
         """)
 
     # ── Guild settings ───────────────────────────────────
@@ -271,6 +284,23 @@ class Database:
             "SELECT role, content, emotion, topic, timestamp FROM conversations "
             "WHERE guild_id = ? AND user_id = ? ORDER BY timestamp DESC LIMIT ?",
             (str(guild_id), str(user_id), limit),
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    def get_conversations_cross_server(
+        self, user_id: int, limit: int = 15
+    ) -> List[Dict]:
+        """Get recent conversation messages for a user across ALL guilds (including DMs).
+
+        This is the key method for cross-server memory: when a user DMs Lily,
+        she can still remember their server conversations. Results are sorted
+        by timestamp so the most recent messages come last, regardless of guild.
+        """
+        conn = self._conn()
+        rows = conn.execute(
+            "SELECT role, content, emotion, topic, guild_id, timestamp FROM conversations "
+            "WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (str(user_id), limit),
         ).fetchall()
         return [dict(r) for r in reversed(rows)]
 
@@ -367,7 +397,7 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    # ── v8.5: Relationships (CROSS-SERVER) ──────────────
+    # ── v9.0: Relationships (CROSS-SERVER) ──────────────
 
     def save_relationship(self, guild_id: int, user_id: int, rel_data: dict) -> None:
         """Save a relationship to the database."""
@@ -444,7 +474,7 @@ class Database:
             results.append(data)
         return results
 
-    # ── v8.5: Memories (CROSS-SERVER) ───────────────────
+    # ── v9.0: Memories (CROSS-SERVER) ───────────────────
 
     def save_memory(
         self, guild_id: int, user_id: int, content: str,
@@ -534,7 +564,7 @@ class Database:
         )
         conn.commit()
 
-    # ── v8.5: Daily Recaps (CROSS-SERVER) ──────────────
+    # ── v9.0: Daily Recaps (CROSS-SERVER) ──────────────
 
     def save_daily_recap(self, guild_id: int, user_id: int, recap_text: str, recap_date: str = None) -> None:
         """Save a daily recap (Lily's diary entry)."""
@@ -559,7 +589,7 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    # ── v8.5: Dream Journal ─────────────────────────────
+    # ── v9.0: Dream Journal ─────────────────────────────
 
     def save_dream(self, dream_text: str, mood: str = "dreamy", 
                    inspiration: str = "", user_id: int = 0) -> None:
@@ -635,7 +665,7 @@ class Database:
             ).fetchone()
         return row["cnt"] if row else 0
 
-    # ── v8.5: Generation Quotas ──────────────────────────
+    # ── v9.0: Generation Quotas ──────────────────────────
 
     def get_quota(self, guild_id: int, user_id: int) -> Optional[Dict]:
         """Get today's quota for a user."""
@@ -690,3 +720,87 @@ class Database:
             (key, value),
         )
         conn.commit()
+
+    # ── Bot-to-bot interaction log ────────────────────────
+
+    def log_bot_interaction(
+        self, guild_id: int, channel_id: int, speaker: str,
+        partner_id: int, content: str
+    ) -> None:
+        """Log a bot-to-bot conversation message."""
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO bot_interactions (guild_id, channel_id, speaker, partner_id, content) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (str(guild_id), str(channel_id), speaker, str(partner_id), content),
+        )
+        conn.commit()
+
+    def get_recent_bot_interactions(
+        self, guild_id: int, partner_id: int, limit: int = 10
+    ) -> List[Dict]:
+        """Get recent bot-to-bot interactions for context."""
+        conn = self._conn()
+        rows = conn.execute(
+            "SELECT speaker, content, created_at FROM bot_interactions "
+            "WHERE guild_id = ? AND partner_id = ? ORDER BY id DESC LIMIT ?",
+            (str(guild_id), str(partner_id), limit),
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    def get_last_bot_interaction_time(self, partner_id: int) -> Optional[str]:
+        """Get the timestamp of the last bot-to-bot interaction."""
+        conn = self._conn()
+        row = conn.execute(
+            "SELECT created_at FROM bot_interactions WHERE partner_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (str(partner_id),),
+        ).fetchone()
+        return row["created_at"] if row else None
+
+    # ── Stats for health dashboard ────────────────────────
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get database statistics for the health dashboard."""
+        conn = self._conn()
+        stats = {}
+
+        # Total conversations
+        row = conn.execute("SELECT COUNT(*) as cnt FROM conversations").fetchone()
+        stats["total_conversations"] = row["cnt"] if row else 0
+
+        # Total users
+        row = conn.execute("SELECT COUNT(DISTINCT user_id) as cnt FROM conversations").fetchone()
+        stats["total_users"] = row["cnt"] if row else 0
+
+        # Total memories
+        row = conn.execute("SELECT COUNT(*) as cnt FROM memories").fetchone()
+        stats["total_memories"] = row["cnt"] if row else 0
+
+        # Total facts
+        row = conn.execute("SELECT COUNT(*) as cnt FROM user_facts").fetchone()
+        stats["total_facts"] = row["cnt"] if row else 0
+
+        # Total dreams
+        row = conn.execute("SELECT COUNT(*) as cnt FROM dream_journal").fetchone()
+        stats["total_dreams"] = row["cnt"] if row else 0
+
+        # Total generations
+        row = conn.execute("SELECT COUNT(*) as cnt FROM generation_log").fetchone()
+        stats["total_generations"] = row["cnt"] if row else 0
+
+        # Today's generations
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM generation_log WHERE created_at >= date('now')"
+        ).fetchone()
+        stats["today_generations"] = row["cnt"] if row else 0
+
+        # Bot interactions
+        row = conn.execute("SELECT COUNT(*) as cnt FROM bot_interactions").fetchone()
+        stats["bot_interactions"] = row["cnt"] if row else 0
+
+        # Total pollen spent
+        row = conn.execute("SELECT COALESCE(SUM(cost_pollen), 0) as total FROM generation_log").fetchone()
+        stats["total_pollen_spent"] = row["total"] if row else 0.0
+
+        return stats

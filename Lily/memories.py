@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Memory System
+Lily v9.0 — Memory System
 
 Short-term, long-term, and daily recap memories.
-v8.5: Cross-server memories — Lily carries memories from ALL servers.
+v9.0: Cross-server memories — Lily carries memories from ALL servers.
 Dream journal — she writes dreams and can share them.
 She remembers what matters, forgets what doesn't, and writes a diary every night.
 """
@@ -33,7 +33,7 @@ class Memory:
     last_accessed: str = ""
     access_count: int = 0
     tags: List[str] = field(default_factory=list)
-    is_global: bool = True    # v8.5: Cross-server by default
+    is_global: bool = True    # v9.0: Cross-server by default
 
     def __post_init__(self):
         now = datetime.now().isoformat()
@@ -45,7 +45,7 @@ class Memory:
 
 class MemorySystem:
     """Lily's memory system. The thing that makes her feel real.
-    v8.5: Cross-server — she carries memories from ALL servers."""
+    v9.0: Cross-server — she carries memories from ALL servers."""
 
     # How many memories of each type to keep per user
     MEMORY_LIMITS = {
@@ -78,7 +78,7 @@ class MemorySystem:
         self._dreams: Dict[str, List[Memory]] = {}     # key -> dream journal
 
     def _key(self, user_id: int | str) -> str:
-        """v8.5: Key is just user_id — memories are cross-server."""
+        """v9.0: Key is just user_id — memories are cross-server."""
         return f"global:{user_id}"
 
     def add_memory(

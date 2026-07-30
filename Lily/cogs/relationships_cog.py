@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Relationships Cog
+Lily v9.0 — Relationships Cog
 
 Commands for viewing and managing relationships with Lily.
 """

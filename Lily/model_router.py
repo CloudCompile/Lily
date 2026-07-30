@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Model Router
+Lily v9.0 — Model Router
 
 Routes different tasks to different models based on pricing and capability.
 Uses the models from the user's screenshots:
@@ -37,6 +37,7 @@ class ModelInfo:
     has_vision: bool = False
     has_reasoning: bool = False
     has_tools: bool = False
+    has_search: bool = False   # Can search the web
     input_modalities: List[str] = None
     output_modalities: List[str] = None
     is_free: bool = False
@@ -183,6 +184,36 @@ class ModelRouter:
             output_modalities=["text"], is_free=False,
         ),
 
+        # ── Search-capable models ──
+        "gemini-search": ModelInfo(
+            name="gemini-search", title="Gemini Search", category="text",
+            brand="Google", description="Web search-capable model for research",
+            prompt_price=0.1, completion_price=0.4,
+            context_length=1000000, has_vision=True, has_reasoning=False,
+            has_tools=True, has_search=True, input_modalities=["text", "image"],
+            output_modalities=["text"], is_free=False,
+        ),
+
+        # ── Fast specialized models ──
+        "claude-fast": ModelInfo(
+            name="claude-fast", title="Claude Fast", category="text",
+            brand="Anthropic", description="Fast coding and analysis model",
+            prompt_price=0.15, completion_price=0.6,
+            context_length=200000, has_vision=False, has_reasoning=False,
+            has_tools=True, input_modalities=["text"],
+            output_modalities=["text"], is_free=False,
+        ),
+
+        # ── Deep reasoning models ──
+        "deepseek": ModelInfo(
+            name="deepseek", title="DeepSeek R1", category="text",
+            brand="DeepSeek", description="Deep reasoning model for complex tasks",
+            prompt_price=0.2, completion_price=0.8,
+            context_length=131072, has_vision=False, has_reasoning=True,
+            has_tools=True, input_modalities=["text"],
+            output_modalities=["text"], is_free=False,
+        ),
+
         # ── Image models ──
         "sana": ModelInfo(
             name="sana", title="Sana Sprint 1.6B", category="image",
@@ -284,13 +315,30 @@ class ModelRouter:
             "min_context": 16000,
             "fallback": "openai-fast",
         },
+        # Research — needs web search
+        "research": {
+            "cost_tier": "budget",
+            "needs_vision": False,
+            "needs_reasoning": False,
+            "needs_search": True,
+            "min_context": 64000,
+            "fallback": "gemini-search",
+        },
+        # Coding — needs code specialist
+        "coding": {
+            "cost_tier": "budget",
+            "needs_vision": False,
+            "needs_reasoning": False,
+            "min_context": 64000,
+            "fallback": "claude-fast",
+        },
         # Complex reasoning — needs reasoning models
         "complex_reasoning": {
             "cost_tier": "premium",
             "needs_vision": False,
             "needs_reasoning": True,
             "min_context": 64000,
-            "fallback": "gpt-5.4-mini",
+            "fallback": "deepseek",
         },
         # Daily recap — cheap
         "daily_recap": {
@@ -384,6 +432,7 @@ class ModelRouter:
                     has_vision="image" in m.get("input_modalities", []),
                     has_reasoning=m.get("reasoning", False),
                     has_tools=m.get("tools", False),
+                    has_search=m.get("search", False),
                     input_modalities=m.get("input_modalities", []),
                     output_modalities=m.get("output_modalities", []),
                     is_free=completion_price == 0,
@@ -419,6 +468,10 @@ class ModelRouter:
             if profile.get("needs_reasoning") and not info.has_reasoning:
                 continue
 
+            # Check search requirement
+            if profile.get("needs_search") and not info.has_search:
+                continue
+
             # Check context length
             if info.context_length < profile.get("min_context", 32000):
                 continue
@@ -449,6 +502,10 @@ class ModelRouter:
             # Reasoning bonus
             if profile.get("needs_reasoning") and info.has_reasoning:
                 score += 10
+
+            # Search bonus
+            if profile.get("needs_search") and info.has_search:
+                score += 20
 
             # Context bonus
             score += min(info.context_length / 100000, 5)

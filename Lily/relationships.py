@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Relationship Engine
+Lily v9.0 — Relationship Engine
 
 Per-user affection/warmness/dislike tracking across all guilds.
 Lily's feelings toward you evolve based on how you interact with her.
@@ -61,7 +61,7 @@ class Relationship:
 
 
 class RelationshipEngine:
-    """Manages all relationships. The emotional core of Lily v8.5."""
+    """Manages all relationships. The emotional core of Lily v9.0."""
 
     # How much each action affects the relationship
     ACTION_WEIGHTS = {

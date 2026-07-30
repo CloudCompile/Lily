@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Memory Cog
+Lily v9.0 — Memory Cog
 
 Commands for viewing and managing memories with Lily.
-v8.5: Dream journal commands, cross-server memories.
+v9.0: Dream journal commands, cross-server memories.
 """
 
 from __future__ import annotations

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Personality Engine
+Lily v9.0 — Personality Engine
 
 Enhanced personality that makes her feel like a real person behind the screen.
 Mood system, personality quirks, typing delays, emotional depth.
-v8.5: Mood-reactive Discord status, dream journal personality.
+v9.0: Mood-reactive Discord status, dream journal personality.
 """
 
 from __future__ import annotations

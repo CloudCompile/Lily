@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Pollinations API Client
+Lily v9.0 — Pollinations API Client
 
 Focused async client for the Pollinations AI API.
 Covers: Text Generation, Image Generation, Image Editing, Models, Embeddings.
@@ -26,6 +26,11 @@ from config import (
 )
 
 log = logging.getLogger("lily.pollinations")
+
+# ── Retry Configuration ────────────────────────────────────
+MAX_RETRIES = 2          # Number of retries on failure
+RETRY_DELAY = 1.0        # Seconds to wait between retries
+RETRY_BACKOFF = 2.0      # Multiplier for each retry (1s, 2s, 4s...)
 
 
 class PollinationsAPI:
@@ -87,7 +92,7 @@ class PollinationsAPI:
         stop: Optional[Union[str, List[str]]] = None,
         user: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """POST /v1/chat/completions — OpenAI-compatible chat completions."""
+        """POST /v1/chat/completions — OpenAI-compatible chat completions with retry."""
         session = await self._get_session()
         body: Dict[str, Any] = {
             "model": model,
@@ -121,13 +126,33 @@ class PollinationsAPI:
         if user is not None:
             body["user"] = user
 
-        async with session.post(
-            f"{self.base_url}/v1/chat/completions",
-            headers=self._headers(),
-            json=body,
-        ) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+        last_error = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                async with session.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    headers=self._headers(),
+                    json=body,
+                ) as resp:
+                    if resp.status >= 500:
+                        error_text = await resp.text()
+                        last_error = f"Server error {resp.status}: {error_text[:300]}"
+                        log.warning(f"Chat retry {attempt + 1}/{MAX_RETRIES}: {last_error}")
+                        if attempt < MAX_RETRIES:
+                            await asyncio.sleep(RETRY_DELAY * (RETRY_BACKOFF ** attempt))
+                            continue
+                        raise Exception(last_error)
+                    resp.raise_for_status()
+                    return await resp.json()
+
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_error = str(e)
+                log.warning(f"Chat retry {attempt + 1}/{MAX_RETRIES}: Connection error: {last_error}")
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(RETRY_DELAY * (RETRY_BACKOFF ** attempt))
+                    continue
+
+        raise Exception(f"Chat completions failed after {MAX_RETRIES + 1} attempts. Last error: {last_error}")
 
     async def chat_completions_simple(
         self,
@@ -219,7 +244,7 @@ class PollinationsAPI:
         image: Optional[str] = None,
         transparent: bool = False,
     ) -> bytes:
-        """Generate an image via GET endpoint. Returns PNG bytes."""
+        """Generate an image via GET endpoint. Returns PNG bytes. Retries on failure."""
         session = await self._get_session()
         from urllib.parse import quote
         encoded_prompt = quote(prompt, safe="")
@@ -242,12 +267,31 @@ class PollinationsAPI:
         if self.api_key:
             params["key"] = self.api_key
 
-        async with session.get(
-            f"{self.base_url}/image/{encoded_prompt}",
-            params=params,
-        ) as resp:
-            resp.raise_for_status()
-            return await resp.read()
+        last_error = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                async with session.get(
+                    f"{self.base_url}/image/{encoded_prompt}",
+                    params=params,
+                ) as resp:
+                    if resp.status >= 500:
+                        last_error = f"Image server error {resp.status}"
+                        log.warning(f"Image retry {attempt + 1}/{MAX_RETRIES}: {last_error}")
+                        if attempt < MAX_RETRIES:
+                            await asyncio.sleep(RETRY_DELAY * (RETRY_BACKOFF ** attempt))
+                            continue
+                        raise Exception(last_error)
+                    resp.raise_for_status()
+                    return await resp.read()
+
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_error = str(e)
+                log.warning(f"Image retry {attempt + 1}/{MAX_RETRIES}: Connection error: {last_error}")
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(RETRY_DELAY * (RETRY_BACKOFF ** attempt))
+                    continue
+
+        raise Exception(f"Image generation failed after {MAX_RETRIES + 1} attempts. Last error: {last_error}")
 
     async def image_generate_post(
         self,

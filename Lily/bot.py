@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — "Lily Lives" Multi-Server AI Discord Bot
+Lily v9.0 — "Lily Lives" Multi-Server AI Discord Bot
 
 Powered by Pollinations API — Text & Image Generation.
 She has feelings, memories, and she'll reach out to you.
@@ -52,6 +52,7 @@ from relationships import RelationshipEngine
 from memories import MemorySystem
 from model_router import ModelRouter
 from quotas import QuotaSystem
+from utils import generate_with_retry, chunk_response
 
 # ── Logging ──────────────────────────────────────────────
 
@@ -72,7 +73,7 @@ intents.dm_messages = True
 
 
 class LilyBot(commands.Bot):
-    """Custom bot class with shared resources for v8.5."""
+    """Custom bot class with shared resources for v9.0."""
 
     def __init__(self):
         super().__init__(
@@ -118,7 +119,7 @@ class LilyBot(commands.Bot):
 
     async def setup_hook(self):
         """Load all cogs and start background tasks."""
-        # v8.5 cogs — no 3D, audio, or video
+        # v9.0 cogs — no 3D, audio, or video
         cog_list = [
             "cogs.core",
             "cogs.ai_chat",
@@ -128,6 +129,7 @@ class LilyBot(commands.Bot):
             "cogs.admin",
             "cogs.relationships_cog",
             "cogs.memory_cog",
+            "cogs.bot_interaction",
         ]
 
         for cog in cog_list:
@@ -511,7 +513,7 @@ class LilyBot(commands.Bot):
     async def on_ready(self):
         """Called when the bot is fully connected."""
         log.info(f"{'='*50}")
-        log.info(f"🌸 Lily v8.5 is online! (Lily Lives)")
+        log.info(f"🌸 Lily v9.0 is online! (Lily Lives)")
         log.info(f"   Servers: {len(self.guilds)}")
         log.info(f"   Pollinations API: {POLLINATIONS_BASE_URL}")
         log.info(f"   API Key: {'configured' if POLLINATIONS_KEY else 'not set (free tier only)'}")
@@ -629,8 +631,11 @@ class LilyBot(commands.Bot):
                 task = "deep_conversation"
             model = await self.get_model_for_task(task, guild_id)
 
-            # Build context — cross-server memories
-            history = self.db.get_conversations(guild_id, user_id, limit=15)
+            # Build context — CROSS-SERVER: when in DMs, include server conversations
+            if is_dm:
+                history = self.db.get_conversations_cross_server(user_id, limit=15)
+            else:
+                history = self.db.get_conversations(guild_id, user_id, limit=15)
             user_facts = self.db.get_facts(guild_id, user_id, cross_server=True)
             recent_recaps = self.db.get_daily_recaps(guild_id, user_id, 3)
             memory_context = self.memories.get_memories_for_prompt(guild_id, user_id, message.content)
@@ -658,19 +663,18 @@ class LilyBot(commands.Bot):
             async with message.channel.typing():
                 await asyncio.sleep(min(typing_delay, 5.0))
 
-            response = await self.api.chat_completions_simple(
-                api_messages, model=model, max_tokens=500
-            )
-
-            # Handle empty response — retry with fallback model
-            if not response or not response.strip():
-                log.warning(f"Empty response from {model}, retrying with openai...")
-                response = await self.api.chat_completions_simple(
-                    api_messages, model="openai", max_tokens=500
+                # Use retry logic with fallback models
+                response = await generate_with_retry(
+                    self.api,
+                    api_messages,
+                    primary_model=model,
+                    max_tokens=500,
                 )
-                if not response or not response.strip():
-                    await message.reply("Hmm, I'm having trouble thinking right now... try again? 💭")
-                    return
+
+            # Handle empty response after all retries
+            if not response or not response.strip():
+                await message.reply("Hmm, I'm having trouble thinking right now... try again? 💭")
+                return
 
             response = self.personality.inject_personality(response, warmth)
 
@@ -682,11 +686,13 @@ class LilyBot(commands.Bot):
             # Save response to conversation
             self.db.add_conversation(guild_id, user_id, "assistant", response, mood)
 
-            # Truncate if too long
-            if len(response) > 2000:
-                response = response[:1997] + "..."
-
-            await message.reply(response)
+            # Send response (chunked if needed)
+            chunks = chunk_response(response)
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    await message.reply(chunk)
+                else:
+                    await message.channel.send(chunk)
 
         except Exception as e:
             log.error(f"Error generating response: {e}")
@@ -706,7 +712,7 @@ class LilyBot(commands.Bot):
 
     async def close(self):
         """Clean up on shutdown."""
-        log.info("Shutting down Lily v8.5...")
+        log.info("Shutting down Lily v9.0...")
         self.proactive_dm_loop.cancel()
         self.daily_recap_loop.cancel()
         self.model_refresh_loop.cancel()
@@ -725,7 +731,7 @@ bot = LilyBot()
 async def prefix_help(ctx):
     """Show help via prefix command."""
     embed = discord.Embed(
-        title="🌸 Lily v8.5 — Help",
+        title="🌸 Lily v9.0 — Help",
         description="Lily is a multi-server AI bot who actually feels real. She remembers you across ALL servers, has feelings, writes dreams, and will reach out to you.",
         color=discord.Color.pink(),
     )
@@ -748,7 +754,7 @@ async def prefix_help(ctx):
         ),
         inline=False,
     )
-    embed.set_footer(text="Lily v8.5 — She lives 💕 | Cross-server memories ✨")
+    embed.set_footer(text="Lily v9.0 — She lives 💕 | Cross-server memories ✨")
     await ctx.send(embed=embed)
 
 
@@ -815,7 +821,7 @@ async def prefix_status(ctx):
     total_users = sum(g.member_count or 0 for g in bot.guilds)
 
     embed = discord.Embed(
-        title="🌸 Lily v8.5 — Status",
+        title="🌸 Lily v9.0 — Status",
         color=discord.Color.green(),
     )
     embed.add_field(name="Servers", value=str(guild_count), inline=True)
@@ -1048,7 +1054,7 @@ if __name__ == "__main__":
         print("ERROR: DISCORD_TOKEN is not set. Create a .env file from .env.example")
         sys.exit(1)
 
-    print("🌸 Starting Lily v8.5 — Lily Lives...")
+    print("🌸 Starting Lily v9.0 — Lily Lives...")
     print(f"   Pollinations API: {POLLINATIONS_BASE_URL}")
     print(f"   API Key: {'configured' if POLLINATIONS_KEY else 'not set (free tier)'}")
     print(f"   Admin IDs: {ADMIN_IDS}")

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Image Generation Cog
+Lily v9.0 — Image Generation Cog
 
 Commands: /image, /image_advanced, /image_edit.
-v8.5: Sana Sprint by default (0.0001/gen!), actual cost tracking.
+v9.0: Sana Sprint by default (0.0001/gen!), actual cost tracking.
 """
 
 from __future__ import annotations

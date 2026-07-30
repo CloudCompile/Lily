@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Admin Cog
+Lily v9.0 — Admin Cog
 
 Server administration commands for guild settings.
-v8.5: Dream journal toggle, updated defaults.
+v9.0: Dream journal toggle, updated defaults, health dashboard.
 """
 
 from __future__ import annotations
+import time
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -21,9 +22,98 @@ class AdminCog(commands.Cog, name="Admin"):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._start_time = time.time()
 
     def _is_admin(self, user_id: int) -> bool:
         return user_id in ADMIN_IDS
+
+    @app_commands.command(name="stats", description="Lily health dashboard (admin only)")
+    async def stats(self, interaction: discord.Interaction):
+        """Comprehensive bot health dashboard."""
+        if not self._is_admin(interaction.user.id):
+            await interaction.response.send_message("Admin only.", ephemeral=True)
+            return
+
+        db: Database = self.bot.db  # type: ignore
+        db_stats = db.get_stats()
+
+        # Calculate uptime
+        uptime_seconds = int(time.time() - self._start_time)
+        days, remainder = divmod(uptime_seconds, 86400)
+        hours, remainder = divmod(remainder, 3600)
+        minutes, _ = divmod(remainder, 60)
+        uptime_str = f"{days}d {hours}h {minutes}m" if days else f"{hours}h {minutes}m"
+
+        # Get mood
+        personality = self.bot.personality  # type: ignore
+        mood = personality.mood.current_mood
+        energy = personality.mood.get_energy()
+
+        # Memory usage
+        try:
+            import psutil
+            import os as _os
+            process = psutil.Process(_os.getpid())
+            mem_mb = process.memory_info().rss / 1024 / 1024
+            mem_str = f"{mem_mb:.1f} MB"
+        except ImportError:
+            mem_str = "N/A"
+
+        # API status
+        api = self.bot.api  # type: ignore
+        api_status = "connected" if api._session and not api._session.closed else "not initialized"
+
+        # Partner status
+        partner_cog = self.bot.get_cog("Bot Interaction")
+        partner_status = "configured" if partner_cog else "not set"
+
+        embed = discord.Embed(
+            title="🌸 Lily v9.0 — Health Dashboard",
+            color=discord.Color.pink(),
+        )
+        embed.add_field(
+            name="System",
+            value=(
+                f"Uptime: {uptime_str}\n"
+                f"Servers: {len(self.bot.guilds)}\n"
+                f"Latency: {round(self.bot.latency * 1000)}ms\n"
+                f"Memory: {mem_str}\n"
+                f"API: {api_status}"
+            ),
+            inline=True,
+        )
+        embed.add_field(
+            name="Personality",
+            value=(
+                f"Mood: {mood}\n"
+                f"Energy: {energy:.1f}/1.0\n"
+                f"Partner: {partner_status}"
+            ),
+            inline=True,
+        )
+        embed.add_field(
+            name="Memory",
+            value=(
+                f"Conversations: {db_stats.get('total_conversations', 0)}\n"
+                f"Users: {db_stats.get('total_users', 0)}\n"
+                f"Memories: {db_stats.get('total_memories', 0)}\n"
+                f"Facts: {db_stats.get('total_facts', 0)}\n"
+                f"Dreams: {db_stats.get('total_dreams', 0)}"
+            ),
+            inline=True,
+        )
+        embed.add_field(
+            name="Generations",
+            value=(
+                f"Total: {db_stats.get('total_generations', 0)}\n"
+                f"Today: {db_stats.get('today_generations', 0)}\n"
+                f"Bot Chats: {db_stats.get('bot_interactions', 0)}\n"
+                f"Pollen Spent: {db_stats.get('total_pollen_spent', 0):.4f}"
+            ),
+            inline=True,
+        )
+        embed.set_footer(text="Lily v9.0 — She lives 💕 | Retry Logic ✅ | Cross-Server Memory ✅")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="set_channel", description="Set the bot's allowed channel")
     @app_commands.describe(channel="The channel where Lily should respond")
@@ -126,7 +216,7 @@ class AdminCog(commands.Cog, name="Admin"):
             inline=True,
         )
         embed.add_field(
-            name="v8.5 Features",
+            name="v9.0 Features",
             value=(
                 f"Proactive DMs: {'✅' if settings.get('proactive_dm_enabled', 1) else '❌'}\n"
                 f"Daily Recaps: {'✅' if settings.get('daily_recap_enabled', 1) else '❌'}\n"

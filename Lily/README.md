@@ -1,4 +1,4 @@
-# 🌸 Lily v8.5 — "Lily Lives"
+# 🌸 Lily v9.0 — "Lily Lives"
 
 Multi-server AI Discord Bot who actually feels real. She remembers you across ALL servers, has feelings, writes dreams, and will reach out to you.
 

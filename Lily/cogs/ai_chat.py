@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — AI Chat Cog
+Lily v9.0 — AI Chat Cog
 
 Text generation commands with smart model routing, relationship awareness,
-and memory integration. v8.5: Cross-server memories, cheap models by default.
+and memory integration. v9.0: Cross-server memories, cheap models by default.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from relationships import RelationshipEngine
 from memories import MemorySystem
 from model_router import ModelRouter
 from quotas import QuotaSystem
+from utils import generate_with_retry, chunk_response, send_chunked
 from config import DEFAULT_TEXT_MODEL, DEFAULT_SAFE_MODE
 
 
@@ -65,8 +66,12 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         use_model = model or await self.bot.get_model_for_task("casual_chat", guild_id)
         safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
 
-        # Build context — cross-server memories
-        history = db.get_conversations(guild_id, user_id, limit=15)
+        # Build context — cross-server memories (DMs get cross-server history)
+        is_dm = not interaction.guild
+        if is_dm:
+            history = db.get_conversations_cross_server(user_id, limit=15)
+        else:
+            history = db.get_conversations(guild_id, user_id, limit=15)
         user_facts = db.get_facts(guild_id, user_id, cross_server=True)
         recent_recaps = db.get_daily_recaps(guild_id, user_id, 3)
         memory_context = memories.get_memories_for_prompt(guild_id, user_id, question)
@@ -127,11 +132,11 @@ class AIChatCog(commands.Cog, name="AI Chat"):
             quotas.record_generation(guild_id, user_id, "text_casual", rel.relationship_tier, actual_cost=cost)
             db.log_generation(guild_id, user_id, "text", use_model, question[:50], cost_pollen=cost)
 
-            # Truncate response if too long
-            if len(response) > 2000:
-                response = response[:1997] + "..."
-
-            await interaction.followup.send(response)
+            # Use chunked response for long text
+            if len(response) > 1900:
+                await send_chunked(interaction.followup, response)
+            else:
+                await interaction.followup.send(response)
 
         except Exception as e:
             await interaction.followup.send(
@@ -172,8 +177,12 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         use_model = model or await self.bot.get_model_for_task(task, guild_id)
         safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
 
-        # Build context — cross-server
-        history = db.get_conversations(guild_id, user_id, limit=15)
+        # Build context — cross-server (DMs get cross-server history)
+        is_dm = not interaction.guild
+        if is_dm:
+            history = db.get_conversations_cross_server(user_id, limit=15)
+        else:
+            history = db.get_conversations(guild_id, user_id, limit=15)
         user_facts = db.get_facts(guild_id, user_id, cross_server=True)
         recent_recaps = db.get_daily_recaps(guild_id, user_id, 3)
         memory_context = memories.get_memories_for_prompt(guild_id, user_id, message)
@@ -222,10 +231,11 @@ class AIChatCog(commands.Cog, name="AI Chat"):
             quotas.record_generation(guild_id, user_id, "text_casual", rel.relationship_tier, actual_cost=cost)
             db.log_generation(guild_id, user_id, "text", use_model, message[:50], cost_pollen=cost)
 
-            if len(response) > 2000:
-                response = response[:1997] + "..."
-
-            await interaction.followup.send(response)
+            # Use chunked response for long text
+            if len(response) > 1900:
+                await send_chunked(interaction.followup, response)
+            else:
+                await interaction.followup.send(response)
 
         except Exception as e:
             await interaction.followup.send(
@@ -278,11 +288,8 @@ class AIChatCog(commands.Cog, name="AI Chat"):
             quotas.record_generation(guild_id, user_id, "text_standard", rel.relationship_tier, actual_cost=cost)
             db.log_generation(guild_id, user_id, "text", use_model, prompt[:50], cost_pollen=cost)
 
-            if len(response) > 2000:
-                chunks = [response[i:i+2000] for i in range(0, len(response), 2000)]
-                await interaction.followup.send(chunks[0])
-                for chunk in chunks[1:]:
-                    await interaction.channel.send(chunk)
+            if len(response) > 1900:
+                await send_chunked(interaction.followup, response)
             else:
                 await interaction.followup.send(response)
 
@@ -330,8 +337,10 @@ class AIChatCog(commands.Cog, name="AI Chat"):
             quotas.record_generation(guild_id, user_id, "text_standard", rel.relationship_tier, actual_cost=cost)
             db.log_generation(guild_id, user_id, "image_analysis", use_model, question[:50], cost_pollen=cost)
 
-            if len(response) > 2000:
-                response = response[:1997] + "..."
+            if len(response) > 1900:
+                desc = response[:1900]
+            else:
+                desc = response
 
             embed = discord.Embed(
                 title="🔍 Image Analysis",

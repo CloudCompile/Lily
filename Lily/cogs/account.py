@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Account Cog
+Lily v9.0 — Account Cog
 
 User account and preferences commands.
 """

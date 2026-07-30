@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Configuration Module
+Lily v9.0 — Configuration Module
 
 Loads settings from environment variables / .env file.
 Supports per-guild overrides stored in the database.
-v8.5: Updated defaults for cheap models (Sana Sprint, openai-fast).
+v9.0: Updated defaults for cheap models (Sana Sprint, openai-fast).
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ ADMIN_IDS: list[int] = [
 # ── Bot behaviour ────────────────────────────────────────
 BOT_PREFIX: str = os.getenv("BOT_PREFIX", "!lily")
 
-# ── Default model selections (v8.5: cheap models by default) ─
+# ── Default model selections (v9.0: cheap models by default) ─
 # Sana Sprint for images (0.0001/gen — dirt cheap!)
 # openai-fast for text (free tier!)
 DEFAULT_TEXT_MODEL: str = os.getenv("DEFAULT_TEXT_MODEL", "openai-fast")
@@ -70,6 +70,9 @@ DB_PATH = DATA_DIR / "lily.db"
 
 # ── Safety ───────────────────────────────────────────────
 DEFAULT_SAFE_MODE: str = "privacy,secrets"
+
+# ── Bot-to-bot interaction ────────────────────────────────
+BOT_PARTNER_ID: int = int(os.getenv("BOT_PARTNER_ID", "0")) if os.getenv("BOT_PARTNER_ID", "").isdigit() else 0
 
 # ── Validation ───────────────────────────────────────────
 if not DISCORD_TOKEN or DISCORD_TOKEN == "YOUR_DISCORD_BOT_TOKEN_HERE":

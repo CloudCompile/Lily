@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lily v8.5 — Models Cog
+Lily v9.0 — Models Cog
 
 Commands for browsing and managing AI models.
 """
