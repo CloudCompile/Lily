@@ -23,14 +23,14 @@ class ModelsCog(commands.Cog, name="Models"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="models", description="List available AI models")
+    @commands.hybrid_command(name="models", description="List available AI models")
     @app_commands.describe(
         category="Model category: text, image, embedding",
         tier="Cost tier: budget, standard, premium"
     )
     async def models(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         category: str = "text",
         tier: str = None,
     ):
@@ -38,19 +38,26 @@ class ModelsCog(commands.Cog, name="Models"):
         router: ModelRouter = self.bot.model_router  # type: ignore
 
         if not router._models:
-            await interaction.response.send_message(
-                "❌ Models not loaded yet. Try again in a moment.", ephemeral=True
-            )
+            if ctx.interaction:
+                await ctx.send("❌ Models not loaded yet. Try again in a moment.", ephemeral=True)
+            else:
+                await ctx.send("❌ Models not loaded yet. Try again in a moment.")
             return
 
         models = router.list_models(category=category, cost_tier=tier)
 
         if not models:
-            await interaction.response.send_message(
-                f"No models found for category `{category}`"
-                + (f" tier `{tier}`" if tier else ""),
-                ephemeral=True,
-            )
+            if ctx.interaction:
+                await ctx.send(
+                    f"No models found for category `{category}`"
+                    + (f" tier `{tier}`" if tier else ""),
+                    ephemeral=True,
+                )
+            else:
+                await ctx.send(
+                    f"No models found for category `{category}`"
+                    + (f" tier `{tier}`" if tier else "")
+                )
             return
 
         embed = discord.Embed(
@@ -73,20 +80,28 @@ class ModelsCog(commands.Cog, name="Models"):
         if len(models) > 20:
             embed.set_footer(text=f"Showing 20 of {len(models)} models")
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if ctx.interaction:
+            await ctx.send(embed=embed, ephemeral=True)
+        else:
+            await ctx.send(embed=embed)
 
-    @app_commands.command(name="model_info", description="Get details about a specific model")
+    @commands.hybrid_command(name="model_info", description="Get details about a specific model")
     @app_commands.describe(model="Model name to look up")
-    async def model_info(self, interaction: discord.Interaction, model: str):
+    async def model_info(self, ctx: commands.Context, model: str):
         """Get detailed info about a specific model."""
         router: ModelRouter = self.bot.model_router  # type: ignore
         info = router.get_model_info(model)
 
         if not info:
-            await interaction.response.send_message(
-                f"❌ Model `{model}` not found. Use `/models` to see available models.",
-                ephemeral=True,
-            )
+            if ctx.interaction:
+                await ctx.send(
+                    f"❌ Model `{model}` not found. Use `/models` to see available models.",
+                    ephemeral=True,
+                )
+            else:
+                await ctx.send(
+                    f"❌ Model `{model}` not found. Use `/models` to see available models."
+                )
             return
 
         embed = discord.Embed(
@@ -104,13 +119,19 @@ class ModelsCog(commands.Cog, name="Models"):
         embed.add_field(name="Reasoning", value="✅" if info.has_reasoning else "❌", inline=True)
         embed.add_field(name="Tools", value="✅" if info.has_tools else "❌", inline=True)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if ctx.interaction:
+            await ctx.send(embed=embed, ephemeral=True)
+        else:
+            await ctx.send(embed=embed)
 
-    @app_commands.command(name="balance", description="Check API balance (admin only)")
-    async def balance(self, interaction: discord.Interaction):
+    @commands.hybrid_command(name="balance", description="Check API balance (admin only)")
+    async def balance(self, ctx: commands.Context):
         """Check Pollinations API balance."""
-        if interaction.user.id not in ADMIN_IDS:
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        if ctx.author.id not in ADMIN_IDS:
+            if ctx.interaction:
+                await ctx.send("❌ Admin only.", ephemeral=True)
+            else:
+                await ctx.send("❌ Admin only.")
             return
 
         api: PollinationsAPI = self.bot.api  # type: ignore
@@ -122,11 +143,15 @@ class ModelsCog(commands.Cog, name="Models"):
             )
             embed.add_field(name="Balance", value=str(result.get("balance", result.get("total", "N/A"))), inline=True)
             embed.add_field(name="Currency", value=result.get("currency", "pollen"), inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            if ctx.interaction:
+                await ctx.send(embed=embed, ephemeral=True)
+            else:
+                await ctx.send(embed=embed)
         except Exception as e:
-            await interaction.response.send_message(
-                f"❌ Failed to check balance: {str(e)[:200]}", ephemeral=True
-            )
+            if ctx.interaction:
+                await ctx.send(f"❌ Failed to check balance: {str(e)[:200]}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ Failed to check balance: {str(e)[:200]}")
 
 
 async def setup(bot: commands.Bot):

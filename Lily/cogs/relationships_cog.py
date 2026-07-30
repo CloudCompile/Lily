@@ -21,16 +21,16 @@ class RelationshipsCog(commands.Cog, name="Relationships"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="relationship", description="See your relationship with Lily")
+    @commands.hybrid_command(name="relationship", description="See your relationship with Lily")
     @app_commands.describe(user="Check someone else's relationship")
     async def relationship(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         user: discord.Member = None,
     ):
         """View relationship details."""
-        guild_id = interaction.guild_id or 0
-        target = user or interaction.user
+        guild_id = ctx.guild.id if ctx.guild else 0
+        target = user or ctx.author
         rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
         db: Database = self.bot.db  # type: ignore
 
@@ -86,18 +86,19 @@ class RelationshipsCog(commands.Cog, name="Relationships"):
             )
 
         embed.set_footer(text="Be nice to Lily and she'll warm up to you! 💕")
-        await interaction.response.send_message(embed=embed)
+        await ctx.send(embed=embed)
 
-    @app_commands.command(name="quota", description="Check your generation quota")
-    async def quota(self, interaction: discord.Interaction):
+    @commands.hybrid_command(name="quota", description="Check your generation quota")
+    async def quota(self, ctx: commands.Context):
         """View your generation quota and pollen budget."""
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
         from quotas import QuotaSystem
         quota_system: QuotaSystem = self.bot.quotas  # type: ignore
 
-        rel = rel_engine.get_relationship(guild_id, interaction.user.id)
-        status = quota_system.get_status(guild_id, interaction.user.id, rel.relationship_tier)
+        user_id = ctx.author.id
+        rel = rel_engine.get_relationship(guild_id, user_id)
+        status = quota_system.get_status(guild_id, user_id, rel.relationship_tier)
 
         embed = discord.Embed(
             title="🌸 Your Generation Quota",
@@ -120,7 +121,10 @@ class RelationshipsCog(commands.Cog, name="Relationships"):
         embed.add_field(name="Tier", value=status['tier'].replace("_", " ").title(), inline=True)
         embed.set_footer(text="Higher relationship tiers = more pollen! Be nice to Lily 💕")
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if ctx.interaction:
+            await ctx.send(embed=embed, ephemeral=True)
+        else:
+            await ctx.send(embed=embed)
 
 
 async def setup(bot: commands.Bot):

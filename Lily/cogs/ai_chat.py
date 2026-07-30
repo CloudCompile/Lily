@@ -31,18 +31,18 @@ class AIChatCog(commands.Cog, name="AI Chat"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="ask", description="Ask Lily a question")
+    @commands.hybrid_command(name="ask", description="Ask Lily a question")
     @app_commands.describe(question="Your question", model="AI model to use (leave empty for smart routing)")
     async def ask(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         question: str,
         model: str = None,
     ):
         """Ask Lily anything using Pollinations text generation."""
-        await interaction.response.defer(thinking=True)
+        await ctx.defer(thinking=True)
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         api: PollinationsAPI = self.bot.api  # type: ignore
         personality: PersonalityEngine = self.bot.personality  # type: ignore
         db: Database = self.bot.db  # type: ignore
@@ -50,7 +50,7 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         memories: MemorySystem = self.bot.memories  # type: ignore
         quotas: QuotaSystem = self.bot.quotas  # type: ignore
 
-        user_id = interaction.user.id
+        user_id = ctx.author.id
 
         # Get relationship
         rel = rel_engine.get_relationship(guild_id, user_id)
@@ -59,7 +59,10 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         # Check quota (casual chat is free with openai-fast)
         can_gen, reason = quotas.can_generate(guild_id, user_id, "text_casual", rel.relationship_tier)
         if not can_gen:
-            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            if ctx.interaction:
+                await ctx.send(f"❌ {reason}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ {reason}")
             return
 
         # Smart model routing
@@ -67,7 +70,7 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
 
         # Build context — cross-server memories (DMs get cross-server history)
-        is_dm = not interaction.guild
+        is_dm = not ctx.guild
         if is_dm:
             history = db.get_conversations_cross_server(user_id, limit=15)
         else:
@@ -134,27 +137,28 @@ class AIChatCog(commands.Cog, name="AI Chat"):
 
             # Use chunked response for long text
             if len(response) > 1900:
-                await send_chunked(interaction.followup, response)
+                await send_chunked(ctx, response)
             else:
-                await interaction.followup.send(response)
+                await ctx.send(response)
 
         except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to generate response: {str(e)[:200]}", ephemeral=True
-            )
+            if ctx.interaction:
+                await ctx.send(f"❌ Failed to generate response: {str(e)[:200]}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ Failed to generate response: {str(e)[:200]}")
 
-    @app_commands.command(name="chat", description="Have a conversation with Lily")
+    @commands.hybrid_command(name="chat", description="Have a conversation with Lily")
     @app_commands.describe(message="Your message", model="AI model to use")
     async def chat(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         message: str,
         model: str = None,
     ):
         """Have a conversation with Lily using full context."""
-        await interaction.response.defer(thinking=True)
+        await ctx.defer(thinking=True)
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         api: PollinationsAPI = self.bot.api  # type: ignore
         personality: PersonalityEngine = self.bot.personality  # type: ignore
         db: Database = self.bot.db  # type: ignore
@@ -162,14 +166,17 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         memories: MemorySystem = self.bot.memories  # type: ignore
         quotas: QuotaSystem = self.bot.quotas  # type: ignore
 
-        user_id = interaction.user.id
+        user_id = ctx.author.id
         rel = rel_engine.get_relationship(guild_id, user_id)
         warmth = rel.warmth
 
         # Check quota
         can_gen, reason = quotas.can_generate(guild_id, user_id, "text_casual", rel.relationship_tier)
         if not can_gen:
-            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            if ctx.interaction:
+                await ctx.send(f"❌ {reason}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ {reason}")
             return
 
         # Route to appropriate model
@@ -178,7 +185,7 @@ class AIChatCog(commands.Cog, name="AI Chat"):
         safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
 
         # Build context — cross-server (DMs get cross-server history)
-        is_dm = not interaction.guild
+        is_dm = not ctx.guild
         if is_dm:
             history = db.get_conversations_cross_server(user_id, limit=15)
         else:
@@ -233,16 +240,17 @@ class AIChatCog(commands.Cog, name="AI Chat"):
 
             # Use chunked response for long text
             if len(response) > 1900:
-                await send_chunked(interaction.followup, response)
+                await send_chunked(ctx, response)
             else:
-                await interaction.followup.send(response)
+                await ctx.send(response)
 
         except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to generate response: {str(e)[:200]}", ephemeral=True
-            )
+            if ctx.interaction:
+                await ctx.send(f"❌ Failed to generate response: {str(e)[:200]}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ Failed to generate response: {str(e)[:200]}")
 
-    @app_commands.command(name="imagine", description="Generate creative text from a prompt")
+    @commands.hybrid_command(name="imagine", description="Generate creative text from a prompt")
     @app_commands.describe(
         prompt="What to imagine",
         model="AI model to use",
@@ -250,26 +258,29 @@ class AIChatCog(commands.Cog, name="AI Chat"):
     )
     async def imagine(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         prompt: str,
         model: str = None,
         temperature: float = None,
     ):
         """Creative text generation."""
-        await interaction.response.defer(thinking=True)
+        await ctx.defer(thinking=True)
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         api: PollinationsAPI = self.bot.api  # type: ignore
         db: Database = self.bot.db  # type: ignore
         rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
         quotas: QuotaSystem = self.bot.quotas  # type: ignore
 
-        user_id = interaction.user.id
+        user_id = ctx.author.id
         rel = rel_engine.get_relationship(guild_id, user_id)
 
         can_gen, reason = quotas.can_generate(guild_id, user_id, "text_standard", rel.relationship_tier)
         if not can_gen:
-            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            if ctx.interaction:
+                await ctx.send(f"❌ {reason}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ {reason}")
             return
 
         use_model = model or await self.bot.get_model_for_task("creative_writing", guild_id)
@@ -289,16 +300,17 @@ class AIChatCog(commands.Cog, name="AI Chat"):
             db.log_generation(guild_id, user_id, "text", use_model, prompt[:50], cost_pollen=cost)
 
             if len(response) > 1900:
-                await send_chunked(interaction.followup, response)
+                await send_chunked(ctx, response)
             else:
-                await interaction.followup.send(response)
+                await ctx.send(response)
 
         except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to generate: {str(e)[:200]}", ephemeral=True
-            )
+            if ctx.interaction:
+                await ctx.send(f"❌ Failed to generate: {str(e)[:200]}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ Failed to generate: {str(e)[:200]}")
 
-    @app_commands.command(name="analyze", description="Analyze an image using AI vision")
+    @commands.hybrid_command(name="analyze", description="Analyze an image using AI vision")
     @app_commands.describe(
         image_url="URL of the image to analyze",
         question="What do you want to know about the image?",
@@ -306,26 +318,29 @@ class AIChatCog(commands.Cog, name="AI Chat"):
     )
     async def analyze(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         image_url: str,
         question: str = "What is in this image?",
         model: str = None,
     ):
         """Analyze an image using a vision-capable model."""
-        await interaction.response.defer(thinking=True)
+        await ctx.defer(thinking=True)
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         api: PollinationsAPI = self.bot.api  # type: ignore
         db: Database = self.bot.db  # type: ignore
         rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
         quotas: QuotaSystem = self.bot.quotas  # type: ignore
 
-        user_id = interaction.user.id
+        user_id = ctx.author.id
         rel = rel_engine.get_relationship(guild_id, user_id)
 
         can_gen, reason = quotas.can_generate(guild_id, user_id, "text_standard", rel.relationship_tier)
         if not can_gen:
-            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            if ctx.interaction:
+                await ctx.send(f"❌ {reason}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ {reason}")
             return
 
         use_model = model or await self.bot.get_model_for_task("image_analysis", guild_id)
@@ -349,14 +364,15 @@ class AIChatCog(commands.Cog, name="AI Chat"):
             )
             embed.set_thumbnail(url=image_url)
             embed.set_footer(text=f"Model: {use_model}")
-            await interaction.followup.send(embed=embed)
+            await ctx.send(embed=embed)
 
         except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to analyze image: {str(e)[:200]}", ephemeral=True
-            )
+            if ctx.interaction:
+                await ctx.send(f"❌ Failed to analyze image: {str(e)[:200]}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ Failed to analyze image: {str(e)[:200]}")
 
-    @app_commands.command(name="translate", description="Translate text to another language")
+    @commands.hybrid_command(name="translate", description="Translate text to another language")
     @app_commands.describe(
         text="Text to translate",
         language="Target language (e.g. Spanish, French, Japanese)",
@@ -364,26 +380,29 @@ class AIChatCog(commands.Cog, name="AI Chat"):
     )
     async def translate(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         text: str,
         language: str,
         model: str = None,
     ):
         """Translate text using AI."""
-        await interaction.response.defer(thinking=True)
+        await ctx.defer(thinking=True)
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         api: PollinationsAPI = self.bot.api  # type: ignore
         db: Database = self.bot.db  # type: ignore
         rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
         quotas: QuotaSystem = self.bot.quotas  # type: ignore
 
-        user_id = interaction.user.id
+        user_id = ctx.author.id
         rel = rel_engine.get_relationship(guild_id, user_id)
 
         can_gen, reason = quotas.can_generate(guild_id, user_id, "translation", rel.relationship_tier)
         if not can_gen:
-            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            if ctx.interaction:
+                await ctx.send(f"❌ {reason}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ {reason}")
             return
 
         use_model = model or await self.bot.get_model_for_task("translation", guild_id)
@@ -411,12 +430,13 @@ class AIChatCog(commands.Cog, name="AI Chat"):
             embed.add_field(name="Original", value=text[:1024], inline=False)
             embed.add_field(name="Translation", value=response[:1024], inline=False)
             embed.set_footer(text=f"Model: {use_model}")
-            await interaction.followup.send(embed=embed)
+            await ctx.send(embed=embed)
 
         except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to translate: {str(e)[:200]}", ephemeral=True
-            )
+            if ctx.interaction:
+                await ctx.send(f"❌ Failed to translate: {str(e)[:200]}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ Failed to translate: {str(e)[:200]}")
 
 
 async def setup(bot: commands.Bot):

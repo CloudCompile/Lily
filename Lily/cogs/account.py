@@ -23,15 +23,15 @@ class AccountCog(commands.Cog, name="Account"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="my_stats", description="See your Lily stats")
-    async def my_stats(self, interaction: discord.Interaction):
+    @commands.hybrid_command(name="my_stats", description="See your Lily stats")
+    async def my_stats(self, ctx: commands.Context):
         """See your overall stats with Lily."""
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
         rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
         quotas: QuotaSystem = self.bot.quotas  # type: ignore
 
-        user_id = interaction.user.id
+        user_id = ctx.author.id
         rel = rel_engine.get_relationship(guild_id, user_id)
         quota_status = quotas.get_status(guild_id, user_id, rel.relationship_tier)
         facts = db.get_facts(guild_id, user_id)
@@ -77,7 +77,10 @@ class AccountCog(commands.Cog, name="Account"):
         embed.add_field(name="Image Gens", value=f"{quota_status['image_gens']}/{quota_status['image_limit']}", inline=True)
 
         embed.set_footer(text="Be nice to Lily and she'll warm up to you! 💕")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if ctx.interaction:
+            await ctx.send(embed=embed, ephemeral=True)
+        else:
+            await ctx.send(embed=embed)
 
 
 async def setup(bot: commands.Bot):

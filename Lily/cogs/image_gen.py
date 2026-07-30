@@ -27,7 +27,7 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="image", description="Generate an image from a prompt")
+    @commands.hybrid_command(name="image", description="Generate an image from a prompt")
     @app_commands.describe(
         prompt="Description of the image to generate",
         model="Image model (sana=cheap, flux=quality, gptimage=pro)",
@@ -36,22 +36,22 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
     )
     async def image(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         prompt: str,
         model: str = None,
         width: int = 1024,
         height: int = 1024,
     ):
         """Generate an image from a text prompt. Sana Sprint by default!"""
-        await interaction.response.defer(thinking=True)
+        await ctx.defer(thinking=True)
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
         api: PollinationsAPI = self.bot.api  # type: ignore
         rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
         quotas: QuotaSystem = self.bot.quotas  # type: ignore
 
-        user_id = interaction.user.id
+        user_id = ctx.author.id
         rel = rel_engine.get_relationship(guild_id, user_id)
 
         # Determine gen type based on model
@@ -66,7 +66,10 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
         # Check quota
         can_gen, reason = quotas.can_generate(guild_id, user_id, gen_type, rel.relationship_tier)
         if not can_gen:
-            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            if ctx.interaction:
+                await ctx.send(f"❌ {reason}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ {reason}")
             return
 
         safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
@@ -95,7 +98,7 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
             actual_cost = self.bot.model_router.estimate_image_cost(use_model)
             embed.set_footer(text=f"Model: {use_model} | {width}x{height} | Cost: {actual_cost:.4f} pollen")
 
-            await interaction.followup.send(embed=embed, file=file)
+            await ctx.send(embed=embed, file=file)
 
             # Log and quota with actual cost
             quotas.record_generation(guild_id, user_id, gen_type, rel.relationship_tier, actual_cost=actual_cost)
@@ -110,11 +113,12 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
             )
 
         except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to generate image: {str(e)[:200]}", ephemeral=True
-            )
+            if ctx.interaction:
+                await ctx.send(f"❌ Failed to generate image: {str(e)[:200]}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ Failed to generate image: {str(e)[:200]}")
 
-    @app_commands.command(name="image_advanced", description="Generate image with advanced options")
+    @commands.hybrid_command(name="image_advanced", description="Generate image with advanced options")
     @app_commands.describe(
         prompt="Description of the image",
         model="Image model to use (sana, flux, gptimage, kontext)",
@@ -126,7 +130,7 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
     )
     async def image_advanced(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         prompt: str,
         model: str = "sana",
         width: int = 1024,
@@ -136,15 +140,15 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
         enhance: bool = False,
     ):
         """Generate an image with all available options."""
-        await interaction.response.defer(thinking=True)
+        await ctx.defer(thinking=True)
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
         api: PollinationsAPI = self.bot.api  # type: ignore
         rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
         quotas: QuotaSystem = self.bot.quotas  # type: ignore
 
-        user_id = interaction.user.id
+        user_id = ctx.author.id
         rel = rel_engine.get_relationship(guild_id, user_id)
 
         # Determine gen type based on model and quality
@@ -157,7 +161,10 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
 
         can_gen, reason = quotas.can_generate(guild_id, user_id, gen_type, rel.relationship_tier)
         if not can_gen:
-            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            if ctx.interaction:
+                await ctx.send(f"❌ {reason}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ {reason}")
             return
 
         safe = db.get_guild_setting(guild_id, "safe_mode", DEFAULT_SAFE_MODE)
@@ -189,52 +196,57 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
                 details += " | Enhanced"
             embed.set_footer(text=details)
 
-            await interaction.followup.send(embed=embed, file=file)
+            await ctx.send(embed=embed, file=file)
 
             quotas.record_generation(guild_id, user_id, gen_type, rel.relationship_tier, actual_cost=actual_cost)
             db.log_generation(guild_id, user_id, "image", model, prompt[:50], cost_pollen=actual_cost)
 
         except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to generate image: {str(e)[:200]}", ephemeral=True
-            )
+            if ctx.interaction:
+                await ctx.send(f"❌ Failed to generate image: {str(e)[:200]}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ Failed to generate image: {str(e)[:200]}")
 
-    @app_commands.command(name="image_edit", description="Edit an image with a prompt (attach an image)")
+    @commands.hybrid_command(name="image_edit", description="Edit an image with a prompt (attach an image)")
     @app_commands.describe(
         prompt="What to change about the image",
         model="Image editing model (kontext, gptimage)",
     )
     async def image_edit(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         prompt: str,
         model: str = "kontext",
     ):
         """Edit an attached image using AI."""
-        if not interaction.message or not interaction.message.attachments:
-            await interaction.response.send_message(
-                "❌ Please attach an image to edit!", ephemeral=True
-            )
+        if not ctx.message or not ctx.message.attachments:
+            if ctx.interaction:
+                await ctx.send("❌ Please attach an image to edit!", ephemeral=True)
+            else:
+                await ctx.send("❌ Please attach an image to edit!")
             return
 
-        await interaction.response.defer(thinking=True)
+        await ctx.defer(thinking=True)
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
         api: PollinationsAPI = self.bot.api  # type: ignore
         rel_engine: RelationshipEngine = self.bot.relationships  # type: ignore
         quotas: QuotaSystem = self.bot.quotas  # type: ignore
 
-        user_id = interaction.user.id
+        user_id = ctx.author.id
         rel = rel_engine.get_relationship(guild_id, user_id)
 
         can_gen, reason = quotas.can_generate(guild_id, user_id, "image_edit", rel.relationship_tier)
         if not can_gen:
-            await interaction.followup.send(f"❌ {reason}", ephemeral=True)
+            if ctx.interaction:
+                await ctx.send(f"❌ {reason}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ {reason}")
             return
 
         try:
-            attachment = interaction.message.attachments[0]
+            attachment = ctx.message.attachments[0]
             image_bytes = await attachment.read()
 
             result = await api.image_edit(
@@ -257,7 +269,7 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
                     )
                     embed.set_image(url="attachment://lily_edited.png")
                     embed.set_footer(text=f"Model: {model}")
-                    await interaction.followup.send(embed=embed, file=file)
+                    await ctx.send(embed=embed, file=file)
                 elif "url" in data:
                     embed = discord.Embed(
                         title="🖼️ Edited Image",
@@ -266,18 +278,22 @@ class ImageGenCog(commands.Cog, name="Image Generation"):
                     )
                     embed.set_image(url=data["url"])
                     embed.set_footer(text=f"Model: {model}")
-                    await interaction.followup.send(embed=embed)
+                    await ctx.send(embed=embed)
             else:
-                await interaction.followup.send("❌ No image was returned from the API.", ephemeral=True)
+                if ctx.interaction:
+                    await ctx.send("❌ No image was returned from the API.", ephemeral=True)
+                else:
+                    await ctx.send("❌ No image was returned from the API.")
 
             actual_cost = self.bot.model_router.estimate_image_cost(model)
             quotas.record_generation(guild_id, user_id, "image_edit", rel.relationship_tier, actual_cost=actual_cost)
             db.log_generation(guild_id, user_id, "image_edit", model, prompt[:50], cost_pollen=actual_cost)
 
         except Exception as e:
-            await interaction.followup.send(
-                f"❌ Failed to edit image: {str(e)[:200]}", ephemeral=True
-            )
+            if ctx.interaction:
+                await ctx.send(f"❌ Failed to edit image: {str(e)[:200]}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ Failed to edit image: {str(e)[:200]}")
 
 
 async def setup(bot: commands.Bot):

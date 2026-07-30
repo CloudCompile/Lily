@@ -27,11 +27,14 @@ class AdminCog(commands.Cog, name="Admin"):
     def _is_admin(self, user_id: int) -> bool:
         return user_id in ADMIN_IDS
 
-    @app_commands.command(name="stats", description="Lily health dashboard (admin only)")
-    async def stats(self, interaction: discord.Interaction):
+    @commands.hybrid_command(name="stats", description="Lily health dashboard (admin only)")
+    async def stats(self, ctx: commands.Context):
         """Comprehensive bot health dashboard."""
-        if not self._is_admin(interaction.user.id):
-            await interaction.response.send_message("Admin only.", ephemeral=True)
+        if not self._is_admin(ctx.author.id):
+            if ctx.interaction:
+                await ctx.send("Admin only.", ephemeral=True)
+            else:
+                await ctx.send("Admin only.")
             return
 
         db: Database = self.bot.db  # type: ignore
@@ -113,42 +116,51 @@ class AdminCog(commands.Cog, name="Admin"):
             inline=True,
         )
         embed.set_footer(text="Lily v9.0 — She lives 💕 | Retry Logic ✅ | Cross-Server Memory ✅")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if ctx.interaction:
+            await ctx.send(embed=embed, ephemeral=True)
+        else:
+            await ctx.send(embed=embed)
 
-    @app_commands.command(name="set_channel", description="Set the bot's allowed channel")
+    @commands.hybrid_command(name="set_channel", description="Set the bot's allowed channel")
     @app_commands.describe(channel="The channel where Lily should respond")
     async def set_channel(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         channel: discord.TextChannel,
     ):
         """Set the bot's allowed channel."""
-        if not self._is_admin(interaction.user.id):
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        if not self._is_admin(ctx.author.id):
+            if ctx.interaction:
+                await ctx.send("❌ Admin only.", ephemeral=True)
+            else:
+                await ctx.send("❌ Admin only.")
             return
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
         db.set_guild_setting(guild_id, "allowed_channel", str(channel.id))
-        await interaction.response.send_message(f"✅ Bot channel set to {channel.mention}")
+        await ctx.send(f"✅ Bot channel set to {channel.mention}")
 
-    @app_commands.command(name="set_model", description="Set the default model for a generation type")
+    @commands.hybrid_command(name="set_model", description="Set the default model for a generation type")
     @app_commands.describe(
         model_type="Type: text or image",
         model="Model name (e.g. openai-fast, sana, flux, tomdacatto/ling-3.0-flash)"
     )
     async def set_model(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         model_type: str,
         model: str,
     ):
         """Set the default model for a generation type."""
-        if not self._is_admin(interaction.user.id):
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        if not self._is_admin(ctx.author.id):
+            if ctx.interaction:
+                await ctx.send("❌ Admin only.", ephemeral=True)
+            else:
+                await ctx.send("❌ Admin only.")
             return
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
 
         type_map = {
@@ -158,44 +170,57 @@ class AdminCog(commands.Cog, name="Admin"):
 
         setting_key = type_map.get(model_type.lower())
         if not setting_key:
-            await interaction.response.send_message(
-                f"❌ Invalid model type. Use: {', '.join(type_map.keys())}", ephemeral=True
-            )
+            if ctx.interaction:
+                await ctx.send(
+                    f"❌ Invalid model type. Use: {', '.join(type_map.keys())}", ephemeral=True
+                )
+            else:
+                await ctx.send(
+                    f"❌ Invalid model type. Use: {', '.join(type_map.keys())}"
+                )
             return
 
         db.set_guild_setting(guild_id, setting_key, model)
-        await interaction.response.send_message(f"✅ Default {model_type} model set to `{model}`")
+        await ctx.send(f"✅ Default {model_type} model set to `{model}`")
 
-    @app_commands.command(name="set_prefix", description="Set the bot's command prefix")
+    @commands.hybrid_command(name="set_prefix", description="Set the bot's command prefix")
     @app_commands.describe(prefix="New prefix (e.g. !lily, lily, !)")
     async def set_prefix(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         prefix: str,
     ):
         """Set the bot's command prefix."""
-        if not self._is_admin(interaction.user.id):
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        if not self._is_admin(ctx.author.id):
+            if ctx.interaction:
+                await ctx.send("❌ Admin only.", ephemeral=True)
+            else:
+                await ctx.send("❌ Admin only.")
             return
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
         db.set_guild_setting(guild_id, "prefix", prefix)
-        await interaction.response.send_message(f"✅ Prefix set to `{prefix}`")
+        await ctx.send(f"✅ Prefix set to `{prefix}`")
 
-    @app_commands.command(name="server_settings", description="View server settings")
-    async def server_settings(self, interaction: discord.Interaction):
+    @commands.hybrid_command(name="server_settings", description="View server settings")
+    async def server_settings(self, ctx: commands.Context):
         """View all server settings."""
-        if not self._is_admin(interaction.user.id):
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        if not self._is_admin(ctx.author.id):
+            if ctx.interaction:
+                await ctx.send("❌ Admin only.", ephemeral=True)
+            else:
+                await ctx.send("❌ Admin only.")
             return
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
         settings = db.get_guild_settings(guild_id)
 
+        guild_name = ctx.guild.name if ctx.guild else "DM"
+
         embed = discord.Embed(
-            title=f"⚙️ Server Settings — {interaction.guild.name}",
+            title=f"⚙️ Server Settings — {guild_name}",
             color=discord.Color.blue(),
         )
         embed.add_field(
@@ -226,79 +251,94 @@ class AdminCog(commands.Cog, name="Admin"):
             inline=True,
         )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if ctx.interaction:
+            await ctx.send(embed=embed, ephemeral=True)
+        else:
+            await ctx.send(embed=embed)
 
-    @app_commands.command(name="toggle_proactive", description="Toggle proactive DMs for this server")
+    @commands.hybrid_command(name="toggle_proactive", description="Toggle proactive DMs for this server")
     @app_commands.describe(enabled="Enable or disable proactive DMs")
     async def toggle_proactive(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         enabled: bool = True,
     ):
         """Toggle proactive DMs."""
-        if not self._is_admin(interaction.user.id):
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        if not self._is_admin(ctx.author.id):
+            if ctx.interaction:
+                await ctx.send("❌ Admin only.", ephemeral=True)
+            else:
+                await ctx.send("❌ Admin only.")
             return
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
         db.set_guild_setting(guild_id, "proactive_dm_enabled", 1 if enabled else 0)
         status = "✅ enabled" if enabled else "❌ disabled"
-        await interaction.response.send_message(f"Proactive DMs are now {status} for this server.")
+        await ctx.send(f"Proactive DMs are now {status} for this server.")
 
-    @app_commands.command(name="toggle_recaps", description="Toggle daily recaps for this server")
+    @commands.hybrid_command(name="toggle_recaps", description="Toggle daily recaps for this server")
     @app_commands.describe(enabled="Enable or disable daily recaps")
     async def toggle_recaps(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         enabled: bool = True,
     ):
         """Toggle daily recaps."""
-        if not self._is_admin(interaction.user.id):
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        if not self._is_admin(ctx.author.id):
+            if ctx.interaction:
+                await ctx.send("❌ Admin only.", ephemeral=True)
+            else:
+                await ctx.send("❌ Admin only.")
             return
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
         db.set_guild_setting(guild_id, "daily_recap_enabled", 1 if enabled else 0)
         status = "✅ enabled" if enabled else "❌ disabled"
-        await interaction.response.send_message(f"Daily recaps are now {status} for this server.")
+        await ctx.send(f"Daily recaps are now {status} for this server.")
 
-    @app_commands.command(name="toggle_dreams", description="Toggle dream journal for this server")
+    @commands.hybrid_command(name="toggle_dreams", description="Toggle dream journal for this server")
     @app_commands.describe(enabled="Enable or disable dream journal")
     async def toggle_dreams(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         enabled: bool = True,
     ):
         """Toggle dream journal."""
-        if not self._is_admin(interaction.user.id):
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        if not self._is_admin(ctx.author.id):
+            if ctx.interaction:
+                await ctx.send("❌ Admin only.", ephemeral=True)
+            else:
+                await ctx.send("❌ Admin only.")
             return
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
         db.set_guild_setting(guild_id, "dream_journal_enabled", 1 if enabled else 0)
         status = "✅ enabled" if enabled else "❌ disabled"
-        await interaction.response.send_message(f"Dream journal is now {status} for this server.")
+        await ctx.send(f"Dream journal is now {status} for this server.")
 
-    @app_commands.command(name="reset_user", description="Reset a user's memory and relationship")
+    @commands.hybrid_command(name="reset_user", description="Reset a user's memory and relationship")
     @app_commands.describe(user="The user to reset")
     async def reset_user(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         user: discord.Member,
     ):
         """Reset a user's memory and relationship."""
-        if not self._is_admin(interaction.user.id):
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        if not self._is_admin(ctx.author.id):
+            if ctx.interaction:
+                await ctx.send("❌ Admin only.", ephemeral=True)
+            else:
+                await ctx.send("❌ Admin only.")
             return
 
-        guild_id = interaction.guild_id or 0
+        guild_id = ctx.guild.id if ctx.guild else 0
         db: Database = self.bot.db  # type: ignore
         db.clear_conversations(guild_id, user.id)
         db.clear_facts(guild_id, user.id)
-        await interaction.response.send_message(f"✅ Memory and facts cleared for {user.mention}")
+        await ctx.send(f"✅ Memory and facts cleared for {user.mention}")
 
 
 async def setup(bot: commands.Bot):

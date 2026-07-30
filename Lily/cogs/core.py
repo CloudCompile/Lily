@@ -29,8 +29,8 @@ class CoreCog(commands.Cog, name="Core"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="help", description="Show Lily's commands and features")
-    async def help_slash(self, interaction: discord.Interaction):
+    @commands.hybrid_command(name="help", description="Show Lily's commands and features")
+    async def help_slash(self, ctx: commands.Context):
         """Show all available commands."""
         embed = discord.Embed(
             title="🌸 Lily v9.0 — Command Guide",
@@ -115,18 +115,19 @@ class CoreCog(commands.Cog, name="Core"):
         )
 
         embed.set_footer(text="Lily v9.0 — She lives 💕 | Cross-server memories ✨ | Sana Sprint images 🖼️")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if ctx.interaction:
+            await ctx.send(embed=embed, ephemeral=True)
+        else:
+            await ctx.send(embed=embed)
 
-    @app_commands.command(name="ping", description="Check Lily's response time")
-    async def ping(self, interaction: discord.Interaction):
+    @commands.hybrid_command(name="ping", description="Check Lily's response time")
+    async def ping(self, ctx: commands.Context):
         """Simple ping/pong command."""
         latency = round(self.bot.latency * 1000)
-        await interaction.response.send_message(
-            f"🌸 Pong! {latency}ms"
-        )
+        await ctx.send(f"🌸 Pong! {latency}ms")
 
-    @app_commands.command(name="mood", description="Check Lily's current mood")
-    async def mood(self, interaction: discord.Interaction):
+    @commands.hybrid_command(name="mood", description="Check Lily's current mood")
+    async def mood(self, ctx: commands.Context):
         """Display Lily's current mood state."""
         personality: PersonalityEngine = self.bot.personality  # type: ignore
         mood_name, intensity = personality.mood.update()
@@ -157,10 +158,10 @@ class CoreCog(commands.Cog, name="Core"):
         embed.description = mood_descriptions.get(mood_name, "Feeling alright!")
         embed.add_field(name="Discord Status", value=status_text, inline=False)
         embed.set_footer(text="Her mood changes with the time of day! 💕")
-        await interaction.response.send_message(embed=embed)
+        await ctx.send(embed=embed)
 
-    @app_commands.command(name="info", description="Show bot information")
-    async def info(self, interaction: discord.Interaction):
+    @commands.hybrid_command(name="info", description="Show bot information")
+    async def info(self, ctx: commands.Context):
         """Display bot information and stats."""
         db: Database = self.bot.db  # type: ignore
         guild_count = len(self.bot.guilds)
@@ -181,7 +182,7 @@ class CoreCog(commands.Cog, name="Core"):
         embed.add_field(name="Cross-Server Mem", value="✅", inline=True)
         embed.add_field(name="Smart Routing", value="✅", inline=True)
         embed.set_footer(text="Lily v9.0 — She lives 💕 | github.com/cloudcompile/Lily")
-        await interaction.response.send_message(embed=embed)
+        await ctx.send(embed=embed)
 
 
 async def setup(bot: commands.Bot):

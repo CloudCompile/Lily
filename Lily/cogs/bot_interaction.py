@@ -24,8 +24,9 @@ from typing import Optional
 
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 
-from config import ADMIN_IDS, POLLINATIONS_KEY
+from config import ADMIN_IDS, BOT_PARTNER_ID, POLLINATIONS_KEY
 from pollinations import PollinationsAPI
 from database import Database
 from personality import PersonalityEngine
@@ -226,6 +227,107 @@ class BotInteractionCog(commands.Cog, name="Bot Interaction"):
         except Exception as e:
             log.error(f"Failed to generate response to partner: {e}")
             return "lol true"
+
+    @commands.hybrid_command(name="talk_to_nv", description="Manually start a conversation with NullVector (admin only)")
+    @app_commands.describe(topic="Custom topic to talk about (leave empty for auto-generated)")
+    async def talk_to_nv(self, ctx: commands.Context, topic: str = None):
+        """Manually trigger a conversation with NullVector."""
+        # Admin check
+        if ctx.author.id not in ADMIN_IDS:
+            if ctx.interaction:
+                await ctx.send("❌ Admin only.", ephemeral=True)
+            else:
+                await ctx.send("❌ Admin only.")
+            return
+
+        # Check if BOT_PARTNER_ID is configured
+        partner_id = self._get_partner_id()
+        if not partner_id:
+            if ctx.interaction:
+                await ctx.send("❌ NullVector is not configured. Set `BOT_PARTNER_ID` in environment variables.", ephemeral=True)
+            else:
+                await ctx.send("❌ NullVector is not configured. Set `BOT_PARTNER_ID` in environment variables.")
+            return
+
+        # Need a guild to find shared presence
+        if not ctx.guild:
+            if ctx.interaction:
+                await ctx.send("❌ This command can only be used in a server.", ephemeral=True)
+            else:
+                await ctx.send("❌ This command can only be used in a server.")
+            return
+
+        await ctx.defer(thinking=True)
+
+        # Find a shared guild where both bots are present
+        target_guild = None
+        target_channel = None
+
+        # First, check if the current guild has NullVector
+        partner_member = await self._get_partner_in_guild(ctx.guild)
+        if partner_member:
+            target_guild = ctx.guild
+            target_channel = ctx.channel
+        else:
+            # Search other guilds
+            for guild in self.bot.guilds:
+                partner_member = await self._get_partner_in_guild(guild)
+                if not partner_member:
+                    continue
+
+                # Find a suitable channel
+                for channel in guild.text_channels:
+                    if channel.permissions_for(guild.me).send_messages:
+                        target_guild = guild
+                        target_channel = channel
+                        break
+
+                if target_guild:
+                    break
+
+        if not target_guild or not target_channel:
+            if ctx.interaction:
+                await ctx.send("❌ Couldn't find a shared server with NullVector. Make sure both bots are in the same server.", ephemeral=True)
+            else:
+                await ctx.send("❌ Couldn't find a shared server with NullVector. Make sure both bots are in the same server.")
+            return
+
+        try:
+            # Generate the message — use custom topic or auto-generate
+            if topic:
+                message = topic
+            else:
+                async with target_channel.typing():
+                    message = await self._generate_conversation_topic(target_guild)
+
+            # Send the message in the target channel
+            await target_channel.send(message)
+
+            # Update state
+            self._last_conversation_time = 0  # Reset cooldown so NV can respond
+            self._active_conversations[target_channel.id] = 1
+
+            # Log the interaction
+            db: Database = self.bot.db  # type: ignore
+            db.log_bot_interaction(
+                target_guild.id, target_channel.id,
+                "lily", partner_id, message
+            )
+
+            log.info(f"Lily manually started a conversation with NullVector in {target_guild.name}")
+
+            # Confirm to the user
+            if target_channel.id == ctx.channel.id:
+                await ctx.send(f"✅ Started a conversation with NullVector!")
+            else:
+                await ctx.send(f"✅ Started a conversation with NullVector in {target_channel.mention} ({target_guild.name})")
+
+        except Exception as e:
+            log.error(f"Error manually starting conversation with NullVector: {e}")
+            if ctx.interaction:
+                await ctx.send(f"❌ Failed to start conversation: {str(e)[:200]}", ephemeral=True)
+            else:
+                await ctx.send(f"❌ Failed to start conversation: {str(e)[:200]}")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
